@@ -2,6 +2,9 @@
 seed: 2026
 model_name: ViT-L-14-quickgelu
 pretrained: openai
+# Optional trusted raw CLIP initialization, relative to project root or absolute.
+# CLI --pretrained-path takes precedence. Never use a B100/B50 checkpoint here.
+pretrained_path: null
 trainable_blocks: 2
 image_size: 224
 

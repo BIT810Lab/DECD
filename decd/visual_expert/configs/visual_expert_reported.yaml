@@ -1,0 +1,41 @@
+# Extracted historical training settings, not a claim of paper reproduction.
+seed: 2026
+model_name: ViT-L-14-quickgelu
+pretrained: openai
+trainable_blocks: 2
+image_size: 224
+
+batch_size: 6
+eval_batch_size: 32
+num_workers: 0
+backbone_lr: 1.0e-5
+head_lr: 1.0e-4
+weight_decay: 1.0e-4
+amp: true
+threshold: 0.5
+
+reference_batches: 100
+repair_batches: 50
+gamma: 0.5
+repair_lambda: 0.1
+ramp_batches: 10
+rho_max: 10.0
+gradient_epsilon: 1.0e-30
+repair_label_side: real
+
+# Reported checkpoints used mean hinge risk for profiling.
+# The repair objective itself uses a squared hinge.
+risk_column: risk_mean_m0p5
+risk_normalization: minmax
+risk_normalization_alpha: 1.0
+
+manifests:
+  train: data/manifests/mosaic_train.csv
+  dev: data/manifests/mosaic_dev.csv
+
+paths:
+  reference_checkpoint: outputs/reference/reference.pth
+  risk_profile: outputs/risk/risk_profile.json
+  visual_expert_checkpoint: outputs/visual_expert/visual_expert.pth
+
+device: cuda:0

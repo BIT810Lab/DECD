@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,12 @@ def summarize_margins(
     labels: np.ndarray,
     gamma: float,
 ) -> dict[str, float | int]:
+    if logits.ndim != 1 or logits.shape != labels.shape or not logits.size:
+        raise ValueError('invalid risk input shape')
+    if not np.all(np.isfinite(logits)) or not np.all(np.isin(labels, [0, 1])):
+        raise ValueError('invalid/non-finite risk inputs')
+    if not math.isfinite(gamma) or gamma < 0:
+        raise ValueError('invalid risk margin')
     margins = signed_margin(logits, labels)
     deficits = np.maximum(float(gamma) - margins, 0.0)
     key = margin_key(gamma)
@@ -48,7 +55,7 @@ def _normalize_labelwise(
     mode: str,
     alpha: float,
 ) -> np.ndarray:
-    if alpha <= 0:
+    if not np.all(np.isfinite(raw)) or not math.isfinite(alpha) or alpha <= 0:
         raise ValueError("risk normalization alpha must be positive")
     weights = np.zeros_like(raw)
     for label in (0, 1):
@@ -87,7 +94,7 @@ def build_risk_profile(
 ) -> dict[str, Any]:
     """Build a fixed six-cell risk profile from reference predictions."""
 
-    if gamma < 0:
+    if not math.isfinite(gamma) or gamma < 0:
         raise ValueError("gamma must be non-negative")
 
     grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
@@ -181,6 +188,34 @@ def validate_risk_profile(
 ) -> None:
     """Require a risk profile to match the complete active training chain."""
 
+    if profile.get('format_version') != 1:
+        raise ValueError('unsupported risk profile format')
+    raw = np.asarray(profile.get('raw_risk_matrix'), dtype=np.float64)
+    weights = np.asarray(profile.get('weight_matrix'), dtype=np.float64)
+    if (raw.shape != (len(DOMAIN_TO_ID), 2) or weights.shape != raw.shape
+            or not np.all(np.isfinite(raw)) or np.any(raw < 0)
+            or not np.all(np.isfinite(weights)) or np.any(weights < 0)):
+        raise ValueError('invalid risk matrices')
+    expected_weights = _normalize_labelwise(raw, mode=normalization, alpha=normalization_alpha)
+    if not np.allclose(weights, expected_weights, rtol=0, atol=1e-12):
+        raise ValueError('risk weights are inconsistent with the recorded raw risks')
+    cells = profile.get('cells', [])
+    if len(cells) != len(EXPECTED_CELLS):
+        raise ValueError('risk profile must record all six cells')
+    seen = set()
+    for cell in cells:
+        key = (cell.get('domain'), cell.get('label'))
+        if key not in EXPECTED_CELLS or key in seen:
+            raise ValueError('invalid or duplicate risk cell')
+        seen.add(key)
+        d, y = DOMAIN_TO_ID[key[0]], key[1]
+        if cell.get('domain_id') != d or not isinstance(cell.get('n'), int) or cell['n'] <= 0:
+            raise ValueError('invalid risk cell count/domain')
+        for field, expected in [('selected_risk', raw[d, y]), ('repair_weight', weights[d, y])]:
+            value = float(cell.get(field, float('nan')))
+            if not math.isfinite(value) or abs(value - expected) > 1e-12:
+                raise ValueError(f'inconsistent risk cell {field}')
+
     if str(profile.get("risk_column")) != str(risk_column):
         raise ValueError("risk profile column does not match the configuration")
     try:
@@ -190,13 +225,13 @@ def validate_risk_profile(
         raise ValueError(
             "risk profile is missing valid gamma or normalization alpha"
         ) from exc
-    if abs(profile_gamma - float(gamma)) > 1.0e-12:
+    if not math.isfinite(profile_gamma) or abs(profile_gamma - float(gamma)) > 1.0e-12:
         raise ValueError("risk profile gamma does not match the configuration")
     if str(profile.get("normalization")) != str(normalization):
         raise ValueError(
             "risk profile normalization does not match the configuration"
         )
-    if abs(profile_alpha - float(normalization_alpha)) > 1.0e-12:
+    if not math.isfinite(profile_alpha) or abs(profile_alpha - float(normalization_alpha)) > 1.0e-12:
         raise ValueError(
             "risk profile normalization alpha does not match the configuration"
         )

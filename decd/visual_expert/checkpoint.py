@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -14,6 +15,74 @@ import torch
 import yaml
 
 from .model import build_detector, build_optimizer
+from .losses import require_finite
+
+CONTRACT_KEYS = ('model_name', 'pretrained', 'image_size', 'trainable_blocks',
+                 'seed', 'batch_size', 'backbone_lr', 'head_lr', 'weight_decay',
+                 'amp', 'reference_batches')
+
+
+def validate_training_config(config):
+    for key in CONTRACT_KEYS + ('repair_batches', 'gamma', 'repair_lambda',
+            'ramp_batches', 'rho_max', 'gradient_epsilon', 'repair_label_side',
+            'risk_column', 'risk_normalization', 'risk_normalization_alpha'):
+        if key not in config:
+            raise ValueError(f'missing configuration field: {key}')
+    if (config['model_name'], config['pretrained'], config['image_size'],
+            config['trainable_blocks']) != ('ViT-L-14-quickgelu', 'openai', 224, 2):
+        raise ValueError('this extracted protocol requires OpenAI ViT-L/14, 224, last two blocks')
+    for key in ('seed', 'batch_size', 'reference_batches', 'repair_batches', 'ramp_batches'):
+        if isinstance(config[key], bool) or not isinstance(config[key], int) or config[key] < 0:
+            raise ValueError(f'invalid integer configuration: {key}')
+    if config['batch_size'] <= 0 or config['batch_size'] % 6:
+        raise ValueError('batch_size must be a positive multiple of six')
+    if config['reference_batches'] != 100 or config['repair_batches'] != 50:
+        raise ValueError('the extracted endpoint protocol is B100 -> B50')
+    for key in ('backbone_lr', 'head_lr', 'weight_decay', 'gamma', 'repair_lambda',
+                'rho_max', 'gradient_epsilon', 'risk_normalization_alpha'):
+        if not math.isfinite(float(config[key])) or float(config[key]) < 0:
+            raise ValueError(f'invalid finite configuration: {key}')
+    if any(float(config[k]) <= 0 for k in ('backbone_lr', 'head_lr', 'rho_max',
+                                          'gradient_epsilon', 'risk_normalization_alpha')):
+        raise ValueError('learning rates and scaling constants must be positive')
+    if not isinstance(config['amp'], bool) or config['repair_label_side'] != 'real':
+        raise ValueError('invalid AMP setting or non-real repair side')
+    # Validate the existing configurable alternatives, without changing the
+    # reported YAML (mean hinge, gamma0.5, minmax). Do not impose a new loss.
+    margin = f"m{float(config['gamma']):g}".replace('.', 'p')
+    if config['risk_column'] not in (f'risk_mean_{margin}', f'risk_sq_mean_{margin}'):
+        raise ValueError('risk_column does not match the configured gamma')
+    if config['risk_normalization'] not in ('minmax', 'maxnorm', 'raw'):
+        raise ValueError('unknown existing risk normalization')
+
+
+def validate_reference_checkpoint(payload, config, train_manifest_sha256, train_content_sha256):
+    meta = payload.get('metadata', {})
+    if meta.get('stage') != 'reference' or meta.get('completed_batches') != config['reference_batches']:
+        raise ValueError('parent must be a completed B100 reference endpoint')
+    for key in CONTRACT_KEYS:
+        if payload.get('config', {}).get(key) != config.get(key):
+            raise ValueError(f'reference configuration mismatch: {key}')
+    for key, value in [('train_manifest_sha256', train_manifest_sha256),
+                       ('train_content_sha256', train_content_sha256)]:
+        if not value or meta.get(key) != value:
+            raise ValueError(f'reference data provenance mismatch: {key}')
+    state = payload.get('optimizer_state_dict')
+    if not isinstance(state, dict) or not state.get('state'):
+        raise ValueError('B100 AdamW state is required')
+    groups = state.get('param_groups', [])
+    if len(groups) != 2:
+        raise ValueError('expected backbone/head AdamW groups')
+    for group, lr in zip(groups, [config['backbone_lr'], config['head_lr']]):
+        if group.get('lr') != lr or group.get('weight_decay') != config['weight_decay']:
+            raise ValueError('AdamW learning rate / weight decay provenance mismatch')
+        if tuple(group.get('betas', ())) != (.9, .999) or group.get('eps') != 1e-8:
+            raise ValueError('unexpected AdamW mathematics')
+    for item in state['state'].values():
+        step = item.get('step', -1)
+        step = float(step.item()) if torch.is_tensor(step) else float(step)
+        if step != config['reference_batches']:
+            raise ValueError('AdamW step is not the B100 endpoint')
 
 WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 
@@ -143,6 +212,13 @@ def save_checkpoint(
 ) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    for value in detector.state_dict().values():
+        require_finite(value, 'saved model state')
+    if optimizer is not None:
+        for item in optimizer.state.values():
+            for value in item.values():
+                if torch.is_tensor(value):
+                    require_finite(value, 'saved AdamW state')
     payload = {
         "format_version": 1,
         "model_state_dict": detector.state_dict(),
@@ -165,10 +241,12 @@ def load_checkpoint(path: str | Path) -> dict[str, Any]:
     payload = torch.load(
         checkpoint_path,
         map_location="cpu",
-        weights_only=False,
+        weights_only=True,
     )
     if not isinstance(payload, dict):
         raise ValueError("invalid checkpoint payload")
+    if payload.get('format_version') != 1:
+        raise ValueError('unsupported checkpoint format; no implicit legacy conversion')
     return payload
 
 
@@ -187,6 +265,10 @@ def restore_detector(
     *,
     device: torch.device,
     restore_optimizer: bool,
+    expected_config: dict | None = None,
+    train_manifest_sha256: str | None = None,
+    train_content_sha256: str | None = None,
+    require_reference: bool = False,
 ) -> tuple[
     torch.nn.Module,
     torch.optim.Optimizer | None,
@@ -197,7 +279,14 @@ def restore_detector(
     payload = load_checkpoint(checkpoint_path)
     config = payload.get("config", {})
     if not isinstance(config, dict):
-        config = {}
+        raise ValueError('checkpoint configuration must be a mapping')
+    for key in ('model_name', 'pretrained', 'image_size', 'trainable_blocks'):
+        if key not in config:
+            raise ValueError(f'checkpoint missing model configuration: {key}')
+    if require_reference:
+        if expected_config is None:
+            raise ValueError('reference provenance requires an active configuration')
+        validate_reference_checkpoint(payload, expected_config, train_manifest_sha256, train_content_sha256)
 
     model_name = str(config.get("model_name", "ViT-L-14-quickgelu"))
     pretrained = str(config.get("pretrained", "openai"))
@@ -218,6 +307,10 @@ def restore_detector(
     state_dict = payload.get("model_state_dict", payload.get("state_dict"))
     if not isinstance(state_dict, dict):
         raise ValueError("checkpoint has no model state dictionary")
+    for key, value in state_dict.items():
+        if not torch.is_tensor(value):
+            raise ValueError(f'non-tensor model state: {key}')
+        require_finite(value, 'checkpoint parameter')
     detector.load_state_dict(state_dict, strict=True)
 
     optimizer = None
@@ -235,6 +328,15 @@ def restore_detector(
                 "requires the B100 optimizer state"
             )
         optimizer.load_state_dict(optimizer_state)
+        for group in optimizer.param_groups:
+            for parameter in group['params']:
+                item = optimizer.state.get(parameter, {})
+                if not item:
+                    raise ValueError('missing AdamW parameter state')
+                for key in ('exp_avg', 'exp_avg_sq'):
+                    if key not in item or item[key].shape != parameter.shape:
+                        raise ValueError('AdamW state/parameter shape mismatch')
+                    require_finite(item[key], 'AdamW state')
         move_optimizer_state(optimizer, device)
 
     metadata = {

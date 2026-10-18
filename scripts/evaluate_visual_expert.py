@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float)
     parser.add_argument("--path-field")
     parser.add_argument("--domain-field")
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Explicitly allow overwriting existing evaluation files.')
     return parser.parse_args()
 
 
@@ -95,6 +97,10 @@ def main() -> None:
         args.config,
         config["paths"]["evaluation_dir"],
     )
+    if output_dir.exists() and not args.overwrite and any(
+        (output_dir / name).exists() for name in ('predictions.csv', 'metrics.csv', 'metrics.json')
+    ):
+        raise FileExistsError('evaluation files exist; use a new directory or --overwrite')
     device = torch.device(args.device or config["device"])
     threshold = float(
         config["threshold"] if args.threshold is None else args.threshold

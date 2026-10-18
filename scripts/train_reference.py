@@ -19,13 +19,15 @@ from decd.visual_expert.checkpoint import (  # noqa: E402
     resolve_project_path,
     save_checkpoint,
     write_json,
+    validate_training_config,
 )
 from decd.visual_expert.data import (  # noqa: E402
     build_eval_loader,
     build_training_loader,
     load_manifest,
 )
-from decd.visual_expert.losses import detection_loss  # noqa: E402
+from decd.visual_expert.losses import detection_loss, gradient_l2_norm, require_finite  # noqa: E402
+from decd.visual_expert.manifests import assert_disjoint, content_sha256
 from decd.visual_expert.model import (  # noqa: E402
     build_detector,
     build_optimizer,
@@ -45,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-manifest", type=Path)
     parser.add_argument("--dev-manifest", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument('--pretrained-path', type=Path,
+                        help='Trusted raw CLIP initialization file, not a B100/B50 checkpoint.')
     parser.add_argument("--device")
     parser.add_argument("--max-batches", type=int)
     parser.add_argument(
@@ -71,6 +75,7 @@ def _path(
 def main() -> None:
     args = parse_args()
     config = load_yaml_config(args.config)
+    validate_training_config(config)
     train_manifest = _path(
         args.train_manifest,
         args.config,
@@ -87,21 +92,35 @@ def main() -> None:
         config["paths"]["reference_checkpoint"],
     )
     device = torch.device(args.device or config["device"])
-    max_batches = int(args.max_batches or config["reference_batches"])
+    max_batches = int(config['reference_batches'] if args.max_batches is None else args.max_batches)
     seed = int(config["seed"])
+    pretrained_path = args.pretrained_path
+    if pretrained_path is None and config.get('pretrained_path'):
+        pretrained_path = resolve_project_path(args.config, config['pretrained_path'])
+    if pretrained_path is not None:
+        pretrained_path = pretrained_path.expanduser().resolve()
+        if not pretrained_path.is_file():
+            raise FileNotFoundError('explicit pretrained initialization file is missing')
 
     if max_batches <= 0:
         raise ValueError("reference batches must be positive")
+    if max_batches > int(config['reference_batches']):
+        raise ValueError('--max-batches may shorten B100 for debugging, not extend it')
     if int(config["batch_size"]) % 6 != 0:
         raise ValueError("batch_size must be divisible by 6")
     if device.type == "cuda" and not torch.cuda.is_available() and not args.dry_run:
         raise RuntimeError("CUDA was requested but is unavailable")
-    if output.exists() and not args.overwrite and not args.dry_run:
-        raise FileExistsError(f"output exists; pass --overwrite: {output}")
+    protected_outputs = (output, output.with_name('reference_metrics.json'),
+                         output.with_name('reference_train_log.json'),
+                         output.with_name('reference_initialization.json'))
+    if not args.overwrite and not args.dry_run and any(p.exists() for p in protected_outputs):
+        raise FileExistsError('reference output/checkpoint/log exists; choose a new directory or --overwrite')
 
     set_determinism(seed)
-    train_rows = load_manifest(train_manifest, require_domain=True)
-    dev_rows = load_manifest(dev_manifest, require_domain=True)
+    train_rows = load_manifest(train_manifest, require_domain=True, role='train')
+    dev_rows = load_manifest(dev_manifest, require_domain=True, role='dev')
+    assert_disjoint(train_rows, dev_rows)
+    train_content_sha256 = content_sha256(train_rows)
     train_loader = build_training_loader(
         train_rows,
         image_size=int(config["image_size"]),
@@ -133,7 +152,11 @@ def main() -> None:
         image_size=int(config["image_size"]),
         trainable_blocks=int(config["trainable_blocks"]),
         device=device,
+        pretrained_path=pretrained_path,
     )
+    initialization = parameter_info.get('initialization', {})
+    write_json(output.with_name('reference_initialization.json'), initialization)
+    print(f'initialization: {initialization}', flush=True)
     optimizer = build_optimizer(
         parameter_info,
         backbone_lr=float(config["backbone_lr"]),
@@ -150,6 +173,7 @@ def main() -> None:
     log_rows: list[dict[str, float | int]] = []
     for batch_index, batch in enumerate(train_loader, start=1):
         images = batch["image"].to(device, non_blocking=True)
+        require_finite(images, 'training input')
         labels = batch["label"].to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
@@ -160,8 +184,12 @@ def main() -> None:
             logits, _ = detector(images)
             loss = detection_loss(logits, labels)
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        gradient_l2_norm([p.grad for p in parameter_info['trainable_parameters']])
         scaler.step(optimizer)
         scaler.update()
+        for parameter in parameter_info['trainable_parameters']:
+            require_finite(parameter, 'updated B100 parameter')
 
         accuracy = float(
             ((torch.sigmoid(logits) >= config["threshold"]) == labels.bool())
@@ -205,8 +233,11 @@ def main() -> None:
         feature_dim=int(parameter_info["feature_dim"]),
         metadata={
             "stage": "reference",
+            "initialization": initialization,
             "train_manifest": train_manifest.name,
             "train_manifest_sha256": file_sha256(train_manifest),
+            "train_content_sha256": train_content_sha256,
+            "completed_batches": max_batches,
             "dev_manifest": dev_manifest.name,
             "dev_manifest_sha256": file_sha256(dev_manifest),
             "train_samples": len(train_rows),

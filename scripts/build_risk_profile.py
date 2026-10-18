@@ -18,8 +18,10 @@ from decd.visual_expert.checkpoint import (  # noqa: E402
     load_yaml_config,
     resolve_project_path,
     restore_detector,
+    validate_training_config,
 )
 from decd.visual_expert.data import build_eval_loader, load_manifest  # noqa: E402
+from decd.visual_expert.manifests import content_sha256
 from decd.visual_expert.model import collect_predictions, set_determinism  # noqa: E402
 from decd.visual_expert.risk import (  # noqa: E402
     build_risk_profile,
@@ -56,6 +58,7 @@ def _path(
 def main() -> None:
     args = parse_args()
     config = load_yaml_config(args.config)
+    validate_training_config(config)
     manifest = _path(
         args.manifest,
         args.config,
@@ -72,18 +75,25 @@ def main() -> None:
         config["paths"]["risk_profile"],
     )
     device = torch.device(args.device or config["device"])
+    if output.exists():
+        raise FileExistsError('risk profile already exists; choose a new output')
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
 
     set_determinism(int(config["seed"]))
+    rows = load_manifest(manifest, require_domain=True, role='train')
+    train_content_sha256 = content_sha256(rows)
     detector, _, _, checkpoint_metadata = restore_detector(
         checkpoint,
         device=device,
         restore_optimizer=False,
+        expected_config=config,
+        require_reference=True,
+        train_manifest_sha256=file_sha256(manifest),
+        train_content_sha256=train_content_sha256,
     )
     for parameter in detector.parameters():
         parameter.requires_grad = False
-    rows = load_manifest(manifest, require_domain=True)
     loader = build_eval_loader(
         rows,
         image_size=int(checkpoint_metadata["image_size"]),
@@ -106,6 +116,7 @@ def main() -> None:
         provenance={
             "manifest": manifest.name,
             "manifest_sha256": file_sha256(manifest),
+            "train_content_sha256": train_content_sha256,
             "reference_checkpoint": checkpoint.name,
             "reference_checkpoint_sha256": checkpoint_metadata[
                 "checkpoint_sha256"

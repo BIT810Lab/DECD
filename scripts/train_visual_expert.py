@@ -20,6 +20,7 @@ from decd.visual_expert.checkpoint import (  # noqa: E402
     restore_detector,
     save_checkpoint,
     write_json,
+    validate_training_config,
 )
 from decd.visual_expert.data import (  # noqa: E402
     build_eval_loader,
@@ -33,6 +34,7 @@ from decd.visual_expert.losses import (  # noqa: E402
     detection_loss,
     linear_ramp,
     real_only_margin_repair,
+    require_finite,
 )
 from decd.visual_expert.model import (  # noqa: E402
     collect_predictions,
@@ -44,6 +46,7 @@ from decd.visual_expert.risk import (  # noqa: E402
     validate_risk_profile,
     weight_tensor,
 )
+from decd.visual_expert.manifests import assert_disjoint, content_sha256
 
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "visual_expert_reported.yaml"
 
@@ -82,6 +85,7 @@ def _path(
 def main() -> None:
     args = parse_args()
     config = load_yaml_config(args.config)
+    validate_training_config(config)
     train_manifest = _path(
         args.train_manifest,
         args.config,
@@ -108,26 +112,40 @@ def main() -> None:
         config["paths"]["visual_expert_checkpoint"],
     )
     device = torch.device(args.device or config["device"])
-    max_batches = int(args.max_batches or config["repair_batches"])
+    max_batches = int(config['repair_batches'] if args.max_batches is None else args.max_batches)
 
     if str(config["repair_label_side"]).lower() != "real":
         raise ValueError("the published Visual Expert supports real-only repair")
     if max_batches <= 0:
         raise ValueError("repair batches must be positive")
+    if max_batches > int(config['repair_batches']):
+        raise ValueError('--max-batches may shorten B50 for debugging, not extend it')
     if int(config["batch_size"]) % 6 != 0:
         raise ValueError("batch_size must be divisible by 6")
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
-    if output.exists() and not args.overwrite:
-        raise FileExistsError(f"output exists; pass --overwrite: {output}")
+    protected_outputs = (output, output.with_name('visual_expert_metrics.json'),
+                         output.with_name('visual_expert_train_log.json'))
+    if not args.overwrite and any(p.exists() for p in protected_outputs):
+        raise FileExistsError('repair output/checkpoint/log exists; choose a new directory or --overwrite')
 
     set_determinism(int(config["seed"]))
     profile = load_risk_profile(risk_profile_path)
+    train_rows = load_manifest(train_manifest, require_domain=True, role='train')
+    dev_rows = load_manifest(dev_manifest, require_domain=True, role='dev')
+    assert_disjoint(train_rows, dev_rows)
+    train_content_sha256 = content_sha256(train_rows)
+    if profile.get('provenance', {}).get('train_content_sha256') != train_content_sha256:
+        raise ValueError('risk profile content identity differs from active Train')
 
     detector, optimizer, parameter_info, reference_metadata = restore_detector(
         reference_checkpoint,
         device=device,
         restore_optimizer=True,
+        expected_config=config,
+        require_reference=True,
+        train_manifest_sha256=file_sha256(train_manifest),
+        train_content_sha256=train_content_sha256,
     )
     if optimizer is None:
         raise RuntimeError("optimizer restoration failed")
@@ -145,8 +163,6 @@ def main() -> None:
         ],
     )
 
-    train_rows = load_manifest(train_manifest, require_domain=True)
-    dev_rows = load_manifest(dev_manifest, require_domain=True)
     train_loader = build_training_loader(
         train_rows,
         image_size=int(reference_metadata["image_size"]),
@@ -171,6 +187,7 @@ def main() -> None:
     log_rows: list[dict[str, float | int]] = []
     for batch_index, batch in enumerate(train_loader, start=1):
         images = batch["image"].to(device, non_blocking=True)
+        require_finite(images, 'training input')
         labels = batch["label"].to(device, non_blocking=True)
         domain_ids = batch["domain_id"].to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
@@ -219,6 +236,8 @@ def main() -> None:
             rho=rho,
         )
         optimizer.step()
+        for parameter in trainable_parameters:
+            require_finite(parameter, 'updated B50 parameter')
 
         with torch.no_grad():
             accuracy = float(
@@ -288,6 +307,8 @@ def main() -> None:
             "risk_profile_sha256": file_sha256(risk_profile_path),
             "train_manifest": train_manifest.name,
             "train_manifest_sha256": train_manifest_sha256,
+            "train_content_sha256": train_content_sha256,
+            "completed_batches": max_batches,
             "dev_manifest": dev_manifest.name,
             "dev_manifest_sha256": file_sha256(dev_manifest),
             "optimizer_restored": True,
