@@ -1,0 +1,36 @@
+# Reported Stage-I configuration for the Prior-Preserved MLLM Semantic Expert.
+# Frozen backbone: Qwen2.5-VL-7B-Instruct; only the PP adapter and a linear
+# head are trained (6.43M parameters, 0.085% of the backbone).
+seed: 2026
+backbone_name: Qwen/Qwen2.5-VL-7B-Instruct
+feature_dim: 3584
+num_prompts: 3
+bottleneck_ratio: 4
+pooling: mean
+amp: true
+
+# Frozen-feature extraction is run once per split before adapter training.
+feature_batch_size: 1
+
+batch_size: 4
+epochs: 30
+learning_rate: 1.0e-4
+weight_decay: 1.0e-5
+np_temperature: 0.1
+np_lambda: 0.5
+selection_metric: macro_f1
+early_stopping_patience: null
+threshold: 0.5
+
+manifests:
+  train: data/manifests/mosaic_train.csv
+  dev: data/manifests/mosaic_dev.csv
+
+features:
+  train: outputs/mllm_features/train_features.pt
+  dev: outputs/mllm_features/dev_features.pt
+
+paths:
+  mllm_expert_checkpoint: outputs/mllm_expert/mllm_expert.pth
+
+device: cuda:0

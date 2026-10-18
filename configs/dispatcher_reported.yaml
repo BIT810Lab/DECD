@@ -1,0 +1,32 @@
+# Reported Stage-II configuration for the confidence-aware dispatcher.
+# Experts stay frozen; the scalar interface (calibrated logits) is all the
+# two-layer MLP sees.
+seed: 2026
+hidden_dim: 64
+learning_rate: 1.0e-3
+weight_decay: 1.0e-4
+batch_size: 32
+epochs: 20
+early_stopping_patience: 5
+rejection_budget: 0.15
+decision_threshold: 0.5
+
+# Temperatures are fitted on the validation split by NLL grid search
+# (reported fit: T_cv = 0.85, T_mllm = 0.70). Set a number to pin a value.
+temperature_cv: null
+temperature_mllm: null
+temperature_grid:
+  min: 0.05
+  max: 5.0
+  step: 0.01
+
+signals:
+  train: data/signals/train_signals.csv
+  dev: data/signals/dev_signals.csv
+  eval: data/signals/eval_signals.csv
+
+paths:
+  dispatcher_checkpoint: outputs/dispatcher/dispatcher.pth
+  evaluation_dir: outputs/dispatcher_evaluation
+
+device: cuda:0
