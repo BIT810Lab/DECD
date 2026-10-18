@@ -88,6 +88,12 @@ example_fake_001,../images/Cartoon/Fake/b.jpg,Cartoon,1,Fake,
 duplicates and held-out overlaps, standardizes accepted images as JPEG, and
 writes a relative-path manifest without touching the source images.
 
+### MOSAIC dataset (upstream source)
+
+[`RANSTA/MOSAIC`](https://huggingface.co/datasets/RANSTA/MOSAIC) — the
+multi-domain AI-generated image detection benchmark (Cartoon / Chart / Photo)
+used to build the manifests above.
+
 ## Stage I-A — Visual Expert
 
 Reported configuration:
