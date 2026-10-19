@@ -39,7 +39,7 @@ def collect(source):
         if (not name or relative.is_absolute() or '..' in relative.parts or '\\' in name
                 or ':' in name or relative.suffix.lower() in FORBIDDEN_SUFFIXES):
             raise ValueError(f'forbidden release member: {name}')
-        if relative.suffix.lower() not in {'.py','.md','.yaml','.txt'} and name not in {'.gitignore','LICENSE'}:
+        if relative.suffix.lower() not in {'.py','.md','.yaml','.txt'} and name not in {'.gitignore','LICENSE','pytest.ini'}:
             raise ValueError(f'non-code/document member in release allowlist: {name}')
         if any(part.lower() in {'outputs','runs','data','datasets','.git','.venv','__pycache__'}
                for part in relative.parts):

@@ -74,10 +74,11 @@ class ManifestDataset(Dataset[dict[str, Any]]):
 
 
 def build_training_loader(rows, *, image_size, batch_size, num_batches, seed,
-                          num_workers, pin_memory):
+                          num_workers, pin_memory, start_batch=0):
     assert_role(rows, 'train')
     sampler = DomainLabelBalancedBatchSampler(rows, batch_size=batch_size,
-                                              num_batches=num_batches, seed=seed)
+                                              num_batches=num_batches, seed=seed,
+                                              start_batch=start_batch)
     return DataLoader(ManifestDataset(rows, image_size), batch_sampler=sampler,
                       num_workers=num_workers, pin_memory=pin_memory,
                       persistent_workers=num_workers > 0)

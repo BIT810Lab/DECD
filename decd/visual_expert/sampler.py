@@ -30,14 +30,18 @@ class DomainLabelBalancedBatchSampler(Sampler[list[int]]):
         batch_size: int,
         num_batches: int,
         seed: int,
+        start_batch: int = 0,
     ) -> None:
         if batch_size <= 0 or batch_size % len(EXPECTED_CELLS) != 0:
             raise ValueError("batch_size must be a positive multiple of 6")
         if num_batches <= 0:
             raise ValueError("num_batches must be positive")
+        if start_batch < 0 or start_batch > num_batches:
+            raise ValueError("start_batch must be between 0 and num_batches")
 
         self.batch_size = int(batch_size)
         self.num_batches = int(num_batches)
+        self.start_batch = int(start_batch)
         self.seed = int(seed)
         self.samples_per_cell = self.batch_size // len(EXPECTED_CELLS)
         self.cell_indices = {cell: [] for cell in EXPECTED_CELLS}
@@ -53,7 +57,7 @@ class DomainLabelBalancedBatchSampler(Sampler[list[int]]):
             raise ValueError(f"empty domain-label cells: {empty}")
 
     def __len__(self) -> int:
-        return self.num_batches
+        return self.num_batches - self.start_batch
 
     def _draw(
         self,
@@ -89,7 +93,7 @@ class DomainLabelBalancedBatchSampler(Sampler[list[int]]):
             queues[cell] = queue
             cursors[cell] = 0
 
-        for _ in range(self.num_batches):
+        for batch_index in range(self.num_batches):
             batch: list[int] = []
             for cell in EXPECTED_CELLS:
                 batch.extend(
@@ -102,4 +106,7 @@ class DomainLabelBalancedBatchSampler(Sampler[list[int]]):
                     )
                 )
             rng.shuffle(batch)
-            yield batch
+            # Reconstruct the exact queue/cursor/RNG state without loading
+            # skipped images when resuming at a completed cycle boundary.
+            if batch_index >= self.start_batch:
+                yield batch

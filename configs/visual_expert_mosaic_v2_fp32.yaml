@@ -1,0 +1,44 @@
+seed: 2026
+model_name: ViT-L-14-quickgelu
+# Portable FP32 template; private frozen inputs are generated on the user's host.
+pretrained: openai
+trainable_blocks: 2
+image_size: 224
+batch_size: 6
+eval_batch_size: 32
+num_workers: 0
+backbone_lr: 1.0e-05
+head_lr: 0.0001
+weight_decay: 0.0001
+amp: false
+threshold: 0.5
+expected_train_per_cell: 700
+expected_dev_per_cell: 100
+reference_batches: 700
+cycles: 14
+bce_batches_per_cycle: 100
+repair_batches_per_cycle: 50
+bce_sampler_seed: 2027
+repair_sampler_seed: 2028
+gamma: 0.5
+repair_lambda: 0.1
+ramp_batches: 10
+rho_max: 10.0
+gradient_epsilon: 1.0e-30
+repair_label_side: real
+risk_column: risk_mean_m0p5
+risk_normalization: minmax
+risk_normalization_alpha: 1.0
+manifests:
+  train: e2e/manifests/mosaic_v2_frozen/mosaic_train.csv
+  dev: e2e/manifests/mosaic_v2_frozen/mosaic_dev.csv
+paths:
+  run_dir: outputs/mosaic_v2_fp32_seed2026
+  reference_checkpoint: outputs/mosaic_v2_fp32_seed2026/reference/reference.pth
+  risk_profile: outputs/mosaic_v2_fp32_seed2026/risk/risk_profile.json
+  visual_expert_checkpoint: outputs/mosaic_v2_fp32_seed2026/visual_expert/visual_expert.pth
+  evaluation_dir: outputs/mosaic_v2_fp32_seed2026/evaluation
+  training_log: outputs/mosaic_v2_fp32_seed2026/logs/training_log.json
+device: cuda:0
+checkpoint_estimate_gib: 2.0
+minimum_free_disk_gib: 1.0

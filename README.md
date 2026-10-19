@@ -4,7 +4,7 @@ This repository provides training code only. Trained model checkpoints are not d
 
 **DECD** is a dual-expert framework for cross-domain detection of AI-generated images. It combines complementary visual and semantic evidence using a confidence-aware dispatcher:
 
-1. **Visual Expert (Stage I-A).** An OpenCLIP ViT-L/14 Real/Fake detector trained with risk-guided decision-boundary refinement. A 100-mini-batch reference stage establishes domain–label risks, followed by 50 mini-batches of real-side margin repair (25.2M trainable parameters).
+1. **Visual Expert (Stage I-A).** An OpenCLIP ViT-L/14 Real/Fake detector trained with risk-guided decision-boundary refinement (25.2M trainable parameters). The MOSAIC v2 full-data entrypoint uses a 700-update reference, fixed Train risk profiling, and 14 cycles of B100/B50 continuation. The legacy single B100/B50 entrypoints remain available separately.
 2. **Semantic Expert (Stage I-B).** A frozen Qwen2.5-VL-7B-Instruct backbone with three fixed reasoning prompts. A consensus-gated bottleneck adapter (`d/4`) and a shared linear head are trained using prompt-level BCE and neighborhood-preservation KL (6.43M trainable parameters).
 3. **Confidence-aware Dispatcher (Stage II).** With both experts frozen, per-expert temperature calibration and a 6→64→1 gating MLP combine their probabilities. A validation-based reliability threshold supports selective abstention.
 
@@ -57,6 +57,9 @@ MOSAIC contains 6,000 images across the Photo, Cartoon, and Chart domains, balan
 | Dev | 100 | 600 | Validation and calibration |
 | Radar/Test | 200 | 1,200 | Final evaluation |
 
+Historical Train6189/Dev597 belongs to a different protocol. Keep its manifests,
+checkpoints and reported metrics separate from this new MOSAIC v2 experiment.
+
 ## Data manifests
 
 Each data manifest is a CSV containing:
@@ -107,9 +110,42 @@ python tools/build_mosaic_benchmark.py \
 
 The tool writes `mosaic_selected_6000.csv`, remaining candidate records, and SHA256 metadata. The selected rows use `split=unassigned`; provide explicit partition selection manifests to organize the 6,000 selected images into Train (4,200), Dev (600), and Radar/Test (1,200). The `--verify` option checks an existing selection.
 
+### Freeze the MOSAIC v2 full-data split
+
+`prepare_mosaic_v2_full_split.py` targets the 6,718-row v2 pool. Its default
+input is `../datasets/mosaic_v2/metadata.csv`, relative to the repository root;
+image `file_name` values resolve under that `mosaic_v2` directory. The private
+legacy exclusion manifest is `e2e/manifests/mosaic_test.csv`. Supply these files
+locally; images, manifests and trained weights are not bundled.
+
+The script verifies every candidate file and SHA256, uses seed 2026, and creates
+700 Train / 100 Dev / 200 Test rows per domain-label cell, plus 718 unused rows.
+Legacy Test contributes only a protected SHA set: repeated or conflicting legacy
+annotations are audited, never copied into v2 labels. Protected identities cannot
+enter Train/Dev; they may enter the new Test using v2 metadata labels.
+Available source/group links are kept together conservatively; missing grouping
+evidence, claim authenticity and near-duplicate isolation are reported explicitly.
+
+```bash
+# Read-only plan, then create new local manifests and a SHA-pinned config.
+python prepare_mosaic_v2_full_split.py
+python prepare_mosaic_v2_full_split.py --write --pretrained-path weights/ViT-L-14.pt
+python prepare_mosaic_v2_full_split.py --verify --pretrained-path weights/ViT-L-14.pt
+```
+
+`--pretrained-path` is optional and accepts the pinned official OpenAI CLIP
+ViT-L/14 initialization file; it avoids a new model download. The outputs are
+`e2e/manifests/mosaic_v2_frozen/mosaic_{train,dev,test}.csv`,
+`mosaic_remaining.csv`, `split_report.json`, `freeze.sha256`, and the private
+`configs/visual_expert_mosaic_v2_frozen.yaml`. Generated image paths are absolute
+on the user's host and must stay out of Git. Existing freezes are compared and
+reused only when identical; they are never silently overwritten or resampled.
+
 ## Stage I-A — Visual Expert
 
-Configuration: [`configs/visual_expert_reported.yaml`](configs/visual_expert_reported.yaml).
+Legacy single B100/B50 configuration:
+[`configs/visual_expert_reported.yaml`](configs/visual_expert_reported.yaml).
+The full-data schedule below has its own configuration and output directory.
 
 | Setting | Value |
 |---|---|
@@ -133,6 +169,40 @@ The fixed risk profile uses mean hinge deficiency. Real-side repair uses a squar
 
 `lambda_now` ramps to 0.1 over the first 10 repair mini-batches.
 
+### MOSAIC v2 full-data alternating training
+
+Portable templates are `configs/visual_expert_mosaic_v2_full.yaml` (AMP) and
+`configs/visual_expert_mosaic_v2_fp32.yaml` (FP32). Both use the same schedule:
+
+- Reference: 700 BCE updates, one balanced pass over Train4200.
+- Profile once with the frozen reference over all 4,200 Train samples.
+- Continue for 14 cycles of 100 BCE updates and 50 BCE + real-side repair
+  updates, totaling 2,800 optimizer updates including Reference.
+
+AdamW state remains continuous. The BCE and Repair samplers each advance across
+cycles; continuation visits every Train image twice in BCE and once in Repair.
+Repair warm-up uses the global repair-update counter. Dev is reporting-only at
+the reference/final endpoints; this entrypoint never loads Test. Cycle-boundary
+resume verifies model/configuration, manifest SHA, reference/profile provenance,
+AdamW moments and update counts.
+
+Prefer the private frozen configuration generated above, which also pins data
+and optional initialization hashes:
+
+```bash
+python scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml --dry-run
+python -u scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml
+python -u scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml --resume
+```
+
+Dry-run forces CPU and checks Train/Dev bytes, groups, all planned sampler
+exposures and disk headroom without constructing CLIP. The portable templates
+contain no machine-specific paths or private freeze hashes. For a private FP32
+run with pinned provenance, copy the generated config to an ignored
+`configs/visual_expert_mosaic_v2_frozen_fp32.yaml`, set `amp: false`, and choose
+a new output directory for all output paths. Keep its `data_freeze` block.
+The original B100/B50 functions and numerical risk/repair definitions are retained.
+
 ### Pretrained initialization
 
 Reference training initializes OpenCLIP using `pretrained: openai`, which resolves official initialization weights through the supported cache/download mechanism. To load a compatible local initialization file, pass `--pretrained-path weights/ViT-L-14.pt` or set `pretrained_path` in the YAML.
@@ -141,7 +211,7 @@ CLI paths resolve from the working directory; YAML paths resolve from the projec
 
 Initialization metadata records the loader and OpenCLIP version; a local initialization file also records its SHA256. Reference checkpoints retain the model and AdamW state for repair continuation.
 
-### Training and evaluation
+### Legacy B100/B50 training and evaluation
 
 ```bash
 # 1. B100 reference training
@@ -254,13 +324,17 @@ Run the Visual Expert CPU smoke test:
 python tools/visual_cpu_smoke.py --output-dir outputs/visual_cpu_data
 ```
 
-Run the DECD test suite:
+Run the maintained DECD CPU suite (install the optional test runner first):
 
 ```bash
-python -m pytest tests/ -q
+python -m pip install 'pytest>=8,<10'
+python -m pytest -q
 ```
 
 These tests cover the Visual Expert's data manifests, stratified selection, risk profiling, margin repair, gradient scaling, checkpoint handling, and the DECD training interfaces.
+`pytest.ini` selects the root tests and bounded Visual acceptance suite. Historical
+nested standalone copies are retained as references and excluded from default
+collection to prevent their package bootstrap from shadowing the root `decd`.
 
 ## Visual-only archive
 
