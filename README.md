@@ -1,38 +1,19 @@
-# DECD: Decoupled Experts with Confidence-aware Dispatching
+# DECD: Decoupled Experts with Confidence-Aware Dispatching for Cross-Domain AI-Generated Image Detection
 
-This repository provides training code only. Trained model checkpoints are not distributed.
 
-**DECD** is a dual-expert framework for cross-domain detection of AI-generated images. It combines complementary visual and semantic evidence using a confidence-aware dispatcher:
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
-1. **Visual Expert (Stage I-A).** An OpenCLIP ViT-L/14 Real/Fake detector trained with risk-guided decision-boundary refinement (25.2M trainable parameters). The MOSAIC v2 full-data entrypoint uses a 700-update reference, fixed Train risk profiling, and 14 cycles of B100/B50 continuation. The legacy single B100/B50 entrypoints remain available separately.
-2. **Semantic Expert (Stage I-B).** A frozen Qwen2.5-VL-7B-Instruct backbone with three fixed reasoning prompts. A consensus-gated bottleneck adapter (`d/4`) and a shared linear head are trained using prompt-level BCE and neighborhood-preservation KL (6.43M trainable parameters).
-3. **Confidence-aware Dispatcher (Stage II).** With both experts frozen, per-expert temperature calibration and a 6→64→1 gating MLP combine their probabilities. A validation-based reliability threshold supports selective abstention.
+> A dual-expert framework for **cross-domain AI-generated image detection** that decouples visual forensics from semantic reasoning and fuses them through a confidence-aware dispatcher — updating only **0.4%** of parameters while closing the cross-domain gap to **≤1 point**.
 
-The experts are trained independently. The dispatcher uses six scalar reliability signals per image.
+---
 
-```text
-            ┌──────────────────────┐   cv logit
- image ───► │ Visual Expert (CLIP) │ ─────────────┐
-            └──────────────────────┘              ▼
-                                       ┌────────────────────┐
-            ┌──────────────────────┐  │ calibrated fusion │  p, route,
- image ───► │ MLLM Expert (frozen  │──┤ + gate MLP (64)    │──► abstain?
-            │ + PP adapter, K=3)   │  │ + abstention (b)   │
-            └──────────────────────┘  └────────────────────┘
-```
+## Framework
 
-## Environment
+![DECD framework](assets/framework1.png)
 
-Linux and Python 3.10+ are recommended. Install a CUDA-enabled PyTorch build appropriate for your system using the [official selector](https://pytorch.org/get-started/locally/), then install the project dependencies:
+*Overview. Stage I trains a risk-guided CV expert and a prior-preserved MLLM expert **independently** (no gradient exchange). Stage II freezes both and trains a lightweight gating network that dispatches each image by per-sample reliability, deciding `Real` / `Fake` or abstaining (`Uncertain`).*
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Dependencies are listed in `requirements.txt`. The Visual Expert uses OpenCLIP 3.3.0; `transformers` supports the Semantic Expert. The dispatcher can also run on CPU.
+---
 
 ## Repository layout
 
