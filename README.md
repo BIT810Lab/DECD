@@ -18,6 +18,7 @@ Run the commands below from the repository root in Bash (Linux/WSL). Training co
 
 ## MOSAIC data
 
+The MOSAIC benchmark is publicly available on [Hugging Face](https://huggingface.co/datasets/RANSTA/MOSAIC). Use its predefined Train/Validation/Test partitions (4,200/600/1,200 images).
 MOSAIC is distributed separately. Use its predefined Train/Validation/Test partitions (4,200/600/1,200 images). The expected layout is:
 
 ```text
