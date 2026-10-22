@@ -1,14 +1,10 @@
 """OpenCLIP detector construction, trainable parameters, and inference."""
 
-# SHA256 verifies trusted local initialization weights and detects file changes
-# during loading. It is model integrity verification, not dataset construction.
-
 from __future__ import annotations
 
 import math
 import os
 import random
-import hashlib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import zipfile
@@ -174,13 +170,9 @@ def build_detector(
     )
     if local_state is not None:
         _strict_load_initialization(clip_model, local_state)
-        if _initialization_sha256(pretrained_path) != initialization['file_sha256']:
-            raise ValueError('local initialization changed while loading')
     elif load_pretrained:
         initialization = {'mode': 'official_openclip', 'pretrained_tag': pretrained,
-                          'loader': 'open_clip.create_model(require_pretrained=True)',
-                          'file_sha256': None,
-                          'file_sha256_note': 'official resolver owns file/cache discovery'}
+                          'loader': 'open_clip.create_model(require_pretrained=True)'}
     try:
         initialization['open_clip_version'] = version('open-clip-torch')
     except PackageNotFoundError:
@@ -202,14 +194,6 @@ def build_detector(
     return detector, parameter_info
 
 
-def _initialization_sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).expanduser().resolve().open('rb') as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b''):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _read_local_pretrained(path: str | Path) -> tuple[dict, dict]:
     """Read trusted raw CLIP initialization, never a DECD trained checkpoint.
 
@@ -220,7 +204,6 @@ def _read_local_pretrained(path: str | Path) -> tuple[dict, dict]:
     source = Path(path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f'local pretrained initialization is missing: {source.name}')
-    digest = _initialization_sha256(source)
     is_script = False
     if zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as archive:
@@ -264,7 +247,7 @@ def _read_local_pretrained(path: str | Path) -> tuple[dict, dict]:
             raise ValueError('CLIP initialization requires materialized floating-point tensors')
         require_finite(value, 'initialization parameter')
     return state, {'mode': 'explicit_local', 'file_name': source.name,
-        'file_sha256': digest, 'format': 'openai_torchscript' if is_script else 'openclip_tensor_state_dict',
+        'format': 'openai_torchscript' if is_script else 'openclip_tensor_state_dict',
         'loader': 'explicit CPU deserialization + exact keys/shapes + load_state_dict(strict=True)',
         'strict': True, 'removed_torchscript_metadata': removed,
         'missing_keys': [], 'unexpected_keys': []}

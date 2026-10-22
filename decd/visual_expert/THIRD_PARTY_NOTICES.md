@@ -1,12 +1,11 @@
 # Licensing boundaries
 
 The existing repository-root `LICENSE` is Apache-2.0 and is retained unchanged
-for the first-party code and documentation in `RELEASE_FILES.txt`. This release
-does not grant rights beyond those owned by its contributors. The standalone
-code archive omits Git history. Its contents do not certify historical ownership
-or provenance of previously tracked assets.
+for the first-party code and documentation in this repository. This release
+does not grant rights beyond those owned by its contributors. Its contents do
+not certify historical ownership or provenance of previously tracked assets.
 
-No dependency source or pretrained weight file is vendored in the ZIP. Install
+No dependency source or pretrained weight file is vendored in this repository. Install
 dependencies separately and retain their own notices when redistributing them:
 
 | Component | License / primary source |

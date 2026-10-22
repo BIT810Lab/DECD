@@ -60,7 +60,6 @@ secrets*.json
 *.log
 *.tmp
 *.zip
-*.zip.sha256
 *.tar
 *.tar.gz
 distribution/
@@ -70,9 +69,6 @@ logs/
 metadata.csv
 mosaic_*.csv
 *_freeze.json
-freeze.sha256
-benchmark_freeze.sha256
-package_manifest.json
 configs/*_local.yaml
 configs/visual_expert_mosaic_v2_frozen*.yaml
 e2e/

@@ -38,7 +38,7 @@ cartoon_real_001,../images/cartoon_real_001.jpg,Cartoon,0,train
 
 Optional `split` values are `train`, `dev`/`validation`/`val`, and `test`. Update YAML manifest paths if needed; YAML paths resolve from the parent of `configs/`. No dataset-construction scripts are required.
 
-CSV loading uses image paths, labels, domains and optional `group_id`; it does not use digest columns or hash image/CSV contents. Split checks cover repeated paths and supplied groups, not duplicate image bytes under different filenames. SHA256 is retained only for trusted local initialization weights and code-archive integrity.
+CSV loading uses image paths, labels, domains and optional `group_id`. Split checks cover repeated paths and supplied groups, not duplicate image bytes under different filenames.
 
 ## Visual Expert
 
@@ -107,13 +107,5 @@ python scripts/evaluate_dispatcher.py --signals data/signals/eval_signals.csv
 Dispatcher defaults are in `configs/dispatcher_reported.yaml`. Evaluation writes metrics and per-sample predictions under `outputs/`. For Visual-only inference, run `evaluate_visual_expert.py` with the desired manifest and checkpoint. Use a fresh output directory for each run.
 
 Known limitations: semantic caches do not reject split overlap/NaNs, and signal joins do not check label conflicts. Tied-confidence abstention and per-domain metrics at nondefault decision thresholds have known edge cases. Real-model benchmark reproduction has not been rerun for this release cleanup.
-
-## Packaging
-
-```bash
-python tools/package_visual_release.py --output-dir outputs/visual_release
-```
-
-The Visual-only archive uses `decd/visual_expert/RELEASE_FILES.txt`; it excludes datasets, weights and the Semantic/Dispatcher modules. Its README is generated from the shared sections of this file. The full repository contains all three components.
 
 License: [Apache-2.0](LICENSE). See [third-party notices](decd/visual_expert/THIRD_PARTY_NOTICES.md) for dependency and model/data licensing boundaries.
