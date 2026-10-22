@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Train the B100 OpenCLIP reference detector."""
 
-# SHA256 records the reference training inputs for verified repair continuation;
-# it is training provenance, not dataset construction.
-
 from __future__ import annotations
 
 import argparse
@@ -17,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from decd.visual_expert.checkpoint import (  # noqa: E402
-    file_sha256,
     load_yaml_config,
     resolve_project_path,
     save_checkpoint,
@@ -30,7 +26,7 @@ from decd.visual_expert.data import (  # noqa: E402
     load_manifest,
 )
 from decd.visual_expert.losses import detection_loss, gradient_l2_norm, require_finite  # noqa: E402
-from decd.visual_expert.manifests import assert_disjoint, content_sha256
+from decd.visual_expert.manifests import assert_disjoint
 from decd.visual_expert.model import (  # noqa: E402
     build_detector,
     build_optimizer,
@@ -123,7 +119,6 @@ def main() -> None:
     train_rows = load_manifest(train_manifest, require_domain=True, role='train')
     dev_rows = load_manifest(dev_manifest, require_domain=True, role='dev')
     assert_disjoint(train_rows, dev_rows)
-    train_content_sha256 = content_sha256(train_rows)
     train_loader = build_training_loader(
         train_rows,
         image_size=int(config["image_size"]),
@@ -238,11 +233,8 @@ def main() -> None:
             "stage": "reference",
             "initialization": initialization,
             "train_manifest": train_manifest.name,
-            "train_manifest_sha256": file_sha256(train_manifest),
-            "train_content_sha256": train_content_sha256,
             "completed_batches": max_batches,
             "dev_manifest": dev_manifest.name,
-            "dev_manifest_sha256": file_sha256(dev_manifest),
             "train_samples": len(train_rows),
             "dev_samples": len(dev_rows),
             "metrics": metrics,

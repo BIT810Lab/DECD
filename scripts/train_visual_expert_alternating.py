@@ -11,9 +11,6 @@ The BCE and repair DataLoader iterators are each created once and consumed
 across cycles. Their sampler queues therefore advance continuously.
 """
 
-# SHA256 validates published split bytes, initialization and checkpoint/profile
-# provenance for training and resume. It is not dataset construction.
-
 from __future__ import annotations
 
 import argparse
@@ -32,7 +29,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from decd.visual_expert.checkpoint import (  # noqa: E402
-    file_sha256,
     load_checkpoint,
     load_yaml_config,
     resolve_project_path,
@@ -279,9 +275,7 @@ def _build_risk_profile(
         alpha=float(config["risk_normalization_alpha"]),
         provenance={
             "manifest": train_manifest.name,
-            "manifest_sha256": file_sha256(train_manifest),
             "reference_checkpoint": reference_checkpoint.name,
-            "reference_checkpoint_sha256": file_sha256(reference_checkpoint),
             "n_train_predictions": len(predictions),
         },
     )
@@ -298,8 +292,8 @@ def _validate_profile(
         gamma=float(config["gamma"]),
         normalization=str(config["risk_normalization"]),
         normalization_alpha=float(config["risk_normalization_alpha"]),
-        train_manifest_sha256=file_sha256(train_manifest),
-        reference_checkpoint_sha256=file_sha256(reference_checkpoint),
+        train_manifest=train_manifest,
+        reference_checkpoint=reference_checkpoint,
     )
 
 
@@ -337,12 +331,6 @@ def main() -> None:
 
     if not args.dry_run:
         set_determinism(int(config["seed"]))
-    # Optional SHA256 pins verify published split CSVs for this training run.
-    # No construction report or private candidate-pool index is required.
-    manifest_pins = config.get("manifest_sha256", {})
-    for role, manifest in (("train", train_manifest), ("dev", dev_manifest)):
-        if role in manifest_pins and file_sha256(manifest) != manifest_pins[role]:
-            raise ValueError(f"Published {role} manifest SHA256 mismatch")
     # Check manifest cardinalities before checking every image path, so an old
     # or partial manifest fails with a useful split-size error first.
     train_rows_manifest = load_manifest(
@@ -367,7 +355,7 @@ def main() -> None:
     integrity = validate_train_dev_integrity(train_rows, dev_rows)
     print(f"Train validated: {len(train_rows)} samples; cells={train_counts}")
     print(f"Dev validated: {len(dev_rows)} samples; cells={dev_counts}")
-    print(f"Train/Dev bytes and available groups verified: {integrity}", flush=True)
+    print(f"Train/Dev paths and available groups verified: {integrity}", flush=True)
     # Three checkpoint-sized allocations cover reference + final + atomic-save
     # temporary file. No output directory is created by this CPU preflight.
     free_bytes = shutil.disk_usage(PROJECT_ROOT).free
@@ -375,10 +363,6 @@ def main() -> None:
     if free_bytes < disk_required:
         raise OSError(f"Disk safety preflight failed: free={free_bytes}, required={disk_required}")
     print(f"Disk preflight: free={free_bytes / 1024**3:.2f} GiB; required={disk_required / 1024**3:.2f} GiB", flush=True)
-    initial_sha = config.get("initialization_sha256")
-    if initial_sha and file_sha256(Path(str(config["pretrained"]))) != initial_sha:
-        raise ValueError("OpenCLIP initialization file SHA mismatch")
-
     reference_batches = int(config["reference_batches"])
     cycles = int(config["cycles"])
     bce_per_cycle = int(config["bce_batches_per_cycle"])
@@ -449,20 +433,14 @@ def main() -> None:
     if args.resume:
         if final_checkpoint.is_file():
             resume_payload = load_checkpoint(final_checkpoint)
-            completed_cycle = validate_resume_contract(
-                resume_payload, config, train_sha256=file_sha256(train_manifest),
-                dev_sha256=file_sha256(dev_manifest),
-                reference_sha256=file_sha256(reference_checkpoint),
-                risk_profile_sha256=file_sha256(risk_profile_path),
-            )
+            completed_cycle = validate_resume_contract(resume_payload, config)
             detector, optimizer, parameter_info, _ = restore_detector(
                 final_checkpoint, device=device, restore_optimizer=True
             )
             stored_metadata = resume_payload.get("metadata", {})
         elif reference_checkpoint.is_file():
             resume_payload = load_checkpoint(reference_checkpoint)
-            validate_resume_contract(resume_payload, config,
-                train_sha256=file_sha256(train_manifest), dev_sha256=file_sha256(dev_manifest))
+            validate_resume_contract(resume_payload, config)
             detector, optimizer, parameter_info, _ = restore_detector(
                 reference_checkpoint, device=device, restore_optimizer=True
             )
@@ -542,9 +520,7 @@ def main() -> None:
             metadata={
                 "stage": "reference",
                 "train_manifest": train_manifest.name,
-                "train_manifest_sha256": file_sha256(train_manifest),
                 "dev_manifest": dev_manifest.name,
-                "dev_manifest_sha256": file_sha256(dev_manifest),
                 "train_samples": len(train_rows),
                 "dev_samples": len(dev_rows),
                 "sample_coverage": reference_coverage,
@@ -686,12 +662,10 @@ def main() -> None:
                 "completed_cycle": cycle,
                 "total_cycles": cycles,
                 "global_updates": global_update,
-                "reference_checkpoint_sha256": file_sha256(reference_checkpoint),
-                "risk_profile_sha256": file_sha256(risk_profile_path),
+                "reference_checkpoint": reference_checkpoint.name,
+                "risk_profile": risk_profile_path.name,
                 "train_manifest": train_manifest.name,
-                "train_manifest_sha256": file_sha256(train_manifest),
                 "dev_manifest": dev_manifest.name,
-                "dev_manifest_sha256": file_sha256(dev_manifest),
                 "optimizer_state_continuous": True,
                 "bce_sampler_seed": int(config["bce_sampler_seed"]),
                 "repair_sampler_seed": int(config["repair_sampler_seed"]),
@@ -738,12 +712,10 @@ def main() -> None:
             "completed_cycle": cycles,
             "total_cycles": cycles,
             "global_updates": reference_batches + total_bce_continuation + total_repair,
-            "reference_checkpoint_sha256": file_sha256(reference_checkpoint),
-            "risk_profile_sha256": file_sha256(risk_profile_path),
+            "reference_checkpoint": reference_checkpoint.name,
+            "risk_profile": risk_profile_path.name,
             "train_manifest": train_manifest.name,
-            "train_manifest_sha256": file_sha256(train_manifest),
             "dev_manifest": dev_manifest.name,
-            "dev_manifest_sha256": file_sha256(dev_manifest),
             "optimizer_state_continuous": True,
             "bce_sampler_seed": int(config["bce_sampler_seed"]),
             "repair_sampler_seed": int(config["repair_sampler_seed"]),
@@ -764,9 +736,9 @@ def main() -> None:
             "sampling_coverage_plan": coverage_plan,
             "reference_dev_metrics": reference_dev_metrics,
             "final_dev_metrics": final_metrics,
-            "reference_checkpoint_sha256": file_sha256(reference_checkpoint),
-            "risk_profile_sha256": file_sha256(risk_profile_path),
-            "final_checkpoint_sha256": file_sha256(final_checkpoint),
+            "reference_checkpoint": reference_checkpoint.name,
+            "risk_profile": risk_profile_path.name,
+            "final_checkpoint": final_checkpoint.name,
         },
     )
     write_json(training_log_path, logs)

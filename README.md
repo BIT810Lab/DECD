@@ -38,7 +38,7 @@ cartoon_real_001,../images/cartoon_real_001.jpg,Cartoon,0,train
 
 Optional `split` values are `train`, `dev`/`validation`/`val`, and `test`. Update YAML manifest paths if needed; YAML paths resolve from the parent of `configs/`. No dataset-construction scripts are required.
 
-Optional CSV `sha256` verifies loaded image bytes and is computed if absent; `group_id` enables split-overlap checks. Legacy `original_sha256`/`standardized_sha256` identify original/encoded bytes for overlap detection. YAML `manifest_sha256.train/dev` can pin published CSV bytes. Checkpoint/profile hashes bind training inputs, initialization and continuation; archive hashes verify release files. These are training/integrity checks, not MOSAIC construction.
+CSV loading uses image paths, labels, domains and optional `group_id`; it does not use digest columns or hash image/CSV contents. Split checks cover repeated paths and supplied groups, not duplicate image bytes under different filenames. SHA256 is retained only for trusted local initialization weights and code-archive integrity.
 
 ## Visual Expert
 

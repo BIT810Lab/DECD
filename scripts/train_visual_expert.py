@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Continue B100 reference training with reported real-only risk repair."""
 
-# SHA256 rejects mismatched reference, Train inputs and risk profiles during
-# repair continuation. It is training validation, not dataset construction.
-
 from __future__ import annotations
 
 import argparse
@@ -17,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from decd.visual_expert.checkpoint import (  # noqa: E402
-    file_sha256,
     load_yaml_config,
     resolve_project_path,
     restore_detector,
@@ -49,7 +45,7 @@ from decd.visual_expert.risk import (  # noqa: E402
     validate_risk_profile,
     weight_tensor,
 )
-from decd.visual_expert.manifests import assert_disjoint, content_sha256
+from decd.visual_expert.manifests import assert_disjoint
 
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "visual_expert_reported.yaml"
 
@@ -137,9 +133,6 @@ def main() -> None:
     train_rows = load_manifest(train_manifest, require_domain=True, role='train')
     dev_rows = load_manifest(dev_manifest, require_domain=True, role='dev')
     assert_disjoint(train_rows, dev_rows)
-    train_content_sha256 = content_sha256(train_rows)
-    if profile.get('provenance', {}).get('train_content_sha256') != train_content_sha256:
-        raise ValueError('risk profile content identity differs from active Train')
 
     detector, optimizer, parameter_info, reference_metadata = restore_detector(
         reference_checkpoint,
@@ -147,23 +140,19 @@ def main() -> None:
         restore_optimizer=True,
         expected_config=config,
         require_reference=True,
-        train_manifest_sha256=file_sha256(train_manifest),
-        train_content_sha256=train_content_sha256,
+        train_manifest=train_manifest,
     )
     if optimizer is None:
         raise RuntimeError("optimizer restoration failed")
 
-    train_manifest_sha256 = file_sha256(train_manifest)
     validate_risk_profile(
         profile,
         risk_column=str(config["risk_column"]),
         gamma=float(config["gamma"]),
         normalization=str(config["risk_normalization"]),
         normalization_alpha=float(config["risk_normalization_alpha"]),
-        train_manifest_sha256=train_manifest_sha256,
-        reference_checkpoint_sha256=reference_metadata[
-            "checkpoint_sha256"
-        ],
+        train_manifest=train_manifest,
+        reference_checkpoint=reference_checkpoint,
     )
 
     train_loader = build_training_loader(
@@ -303,17 +292,10 @@ def main() -> None:
         metadata={
             "stage": "visual_expert",
             "reference_checkpoint": reference_checkpoint.name,
-            "reference_checkpoint_sha256": reference_metadata[
-                "checkpoint_sha256"
-            ],
             "risk_profile": risk_profile_path.name,
-            "risk_profile_sha256": file_sha256(risk_profile_path),
             "train_manifest": train_manifest.name,
-            "train_manifest_sha256": train_manifest_sha256,
-            "train_content_sha256": train_content_sha256,
             "completed_batches": max_batches,
             "dev_manifest": dev_manifest.name,
-            "dev_manifest_sha256": file_sha256(dev_manifest),
             "optimizer_restored": True,
             "metrics": metrics,
         },

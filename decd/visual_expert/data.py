@@ -68,8 +68,7 @@ class ManifestDataset(Dataset[dict[str, Any]]):
         return {'image': image, 'label': torch.tensor(row['label'], dtype=torch.float32),
                 'domain_id': torch.tensor(row['domain_id'], dtype=torch.long),
                 'domain': row['domain'], 'sample_id': row['sample_id'],
-                'manifest_index': torch.tensor(row['manifest_index'], dtype=torch.long),
-                'sha256': row['sha256']}
+                'manifest_index': torch.tensor(row['manifest_index'], dtype=torch.long)}
 
 
 def build_training_loader(rows, *, image_size, batch_size, num_batches, seed,

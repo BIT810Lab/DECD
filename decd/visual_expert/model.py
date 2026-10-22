@@ -339,7 +339,6 @@ def collect_predictions(
                 {
                     "manifest_index": int(indices_np[index]),
                     "sample_id": str(batch["sample_id"][index]),
-                    "sha256": str(batch["sha256"][index]),
                     "domain": str(batch["domain"][index]),
                     "label": int(labels_np[index]),
                     "logit": logit,

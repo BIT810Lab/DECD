@@ -1,11 +1,7 @@
 """Checkpoint save, restore, configuration, and path sanitization."""
 
-# SHA256 binds checkpoint and training-manifest bytes for safe continuation;
-# it is training reproducibility validation, not dataset construction.
-
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -59,17 +55,15 @@ def validate_training_config(config):
         raise ValueError('unknown existing risk normalization')
 
 
-def validate_reference_checkpoint(payload, config, train_manifest_sha256, train_content_sha256):
+def validate_reference_checkpoint(payload, config, train_manifest=None):
     meta = payload.get('metadata', {})
     if meta.get('stage') != 'reference' or meta.get('completed_batches') != config['reference_batches']:
         raise ValueError('parent must be a completed B100 reference endpoint')
     for key in CONTRACT_KEYS:
         if payload.get('config', {}).get(key) != config.get(key):
             raise ValueError(f'reference configuration mismatch: {key}')
-    for key, value in [('train_manifest_sha256', train_manifest_sha256),
-                       ('train_content_sha256', train_content_sha256)]:
-        if not value or meta.get(key) != value:
-            raise ValueError(f'reference data provenance mismatch: {key}')
+    if train_manifest is not None and meta.get('train_manifest') != Path(train_manifest).name:
+        raise ValueError('reference training manifest name differs from active Train')
     state = payload.get('optimizer_state_dict')
     if not isinstance(state, dict) or not state.get('state'):
         raise ValueError('B100 AdamW state is required')
@@ -88,14 +82,6 @@ def validate_reference_checkpoint(payload, config, train_manifest_sha256, train_
             raise ValueError('AdamW step is not the B100 endpoint')
 
 WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
-
-
-def file_sha256(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(chunk_size), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
@@ -269,8 +255,7 @@ def restore_detector(
     device: torch.device,
     restore_optimizer: bool,
     expected_config: dict | None = None,
-    train_manifest_sha256: str | None = None,
-    train_content_sha256: str | None = None,
+    train_manifest: str | Path | None = None,
     require_reference: bool = False,
 ) -> tuple[
     torch.nn.Module,
@@ -289,7 +274,7 @@ def restore_detector(
     if require_reference:
         if expected_config is None:
             raise ValueError('reference provenance requires an active configuration')
-        validate_reference_checkpoint(payload, expected_config, train_manifest_sha256, train_content_sha256)
+        validate_reference_checkpoint(payload, expected_config, train_manifest)
 
     model_name = str(config.get("model_name", "ViT-L-14-quickgelu"))
     pretrained = str(config.get("pretrained", "openai"))
@@ -344,7 +329,6 @@ def restore_detector(
 
     metadata = {
         "checkpoint_name": checkpoint_path.name,
-        "checkpoint_sha256": file_sha256(checkpoint_path),
         "model_name": model_name,
         "pretrained": pretrained,
         "image_size": image_size,

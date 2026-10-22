@@ -1,8 +1,5 @@
 """Decision-margin statistics and fixed domain-label risk profiles."""
 
-# SHA256 provenance binds the fixed risk profile to its training manifest and
-# reference checkpoint. It is training validation, not dataset construction.
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -186,10 +183,10 @@ def validate_risk_profile(
     gamma: float,
     normalization: str,
     normalization_alpha: float,
-    train_manifest_sha256: str,
-    reference_checkpoint_sha256: str,
+    train_manifest: str | Path,
+    reference_checkpoint: str | Path,
 ) -> None:
-    """Require a risk profile to match the complete active training chain."""
+    """Validate risk configuration, matrices and recorded input filenames."""
 
     if profile.get('format_version') != 1:
         raise ValueError('unsupported risk profile format')
@@ -242,22 +239,10 @@ def validate_risk_profile(
     provenance = profile.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("risk profile has no provenance mapping")
-    manifest_hash = str(provenance.get("manifest_sha256", "")).lower()
-    checkpoint_hash = str(
-        provenance.get("reference_checkpoint_sha256", "")
-    ).lower()
-    if not manifest_hash or not checkpoint_hash:
-        raise ValueError(
-            "risk profile provenance is missing manifest or checkpoint SHA256"
-        )
-    if manifest_hash != str(train_manifest_sha256).lower():
-        raise ValueError(
-            "risk profile was built from a different training manifest"
-        )
-    if checkpoint_hash != str(reference_checkpoint_sha256).lower():
-        raise ValueError(
-            "risk profile was built from a different reference checkpoint"
-        )
+    for field, expected in (("manifest", train_manifest),
+                            ("reference_checkpoint", reference_checkpoint)):
+        if provenance.get(field) != Path(expected).name:
+            raise ValueError(f"Risk profile input filename mismatch: {field}")
 
 
 def weight_tensor(

@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Evaluate a frozen Visual Expert checkpoint."""
 
-# SHA256 records evaluated manifest/checkpoint integrity for reproducible
-# inference; it is not part of MOSAIC dataset construction.
-
 from __future__ import annotations
 
 import argparse
@@ -19,7 +16,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from decd.visual_expert.checkpoint import (  # noqa: E402
-    file_sha256,
     load_yaml_config,
     resolve_project_path,
     restore_detector,
@@ -176,7 +172,6 @@ def main() -> None:
         output_dir / "metrics.json",
         {
             "manifest": manifest.name,
-            "manifest_sha256": file_sha256(manifest),
             "checkpoint": checkpoint_metadata,
             "threshold": threshold,
             **metrics,

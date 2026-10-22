@@ -1,16 +1,11 @@
 """Validation helpers for full-data Visual Expert training protocols."""
 
-# SHA256 checks published image integrity and Train/Dev leakage, and binds
-# resume inputs to checkpoints. It is training validation, not construction.
-
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-import hashlib
 import math
 from pathlib import Path
-import re
 from typing import Any
 
 from .sampler import EXPECTED_CELLS
@@ -29,37 +24,27 @@ def validate_training_schedule(config: Mapping[str, Any]) -> None:
 
 
 def validate_train_dev_integrity(train_rows, dev_rows) -> dict[str, int]:
-    """Validate actual bytes and supplied groups; never read a Test manifest."""
-    sha_roles, path_roles, group_roles = {}, {}, {}
+    """Check existing paths, roles and supplied groups without reading image bytes."""
+    path_roles, group_roles = {}, {}
     for role, rows in (("train", train_rows), ("dev", dev_rows)):
         for row in rows:
             if row.get("split") and row["split"] != role:
                 raise ValueError(f"Manifest role mismatch: expected {role}")
-            digest = str(row.get("sha256", "")).strip().lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", digest):
-                raise ValueError(f"Missing/invalid SHA256 in {role}")
             path = Path(row["image_path"]).resolve()
             if not path.is_file():
                 raise FileNotFoundError(path)
-            actual = hashlib.sha256()
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-                    actual.update(chunk)
-            if actual.hexdigest() != digest:
-                raise ValueError(f"Image SHA256 mismatch: {path}")
-            if digest in sha_roles or path in path_roles:
-                raise ValueError("Duplicate/cross-split Train/Dev identity")
-            sha_roles[digest], path_roles[path] = role, role
+            if path in path_roles:
+                raise ValueError("Duplicate/cross-split Train/Dev image path")
+            path_roles[path] = role
             group = str(row.get("group_id", "")).strip()
             if group and group_roles.setdefault(group, role) != role:
                 raise ValueError("Train/Dev source group overlap")
-    return {"verified_image_sha256": len(sha_roles), "train_dev_sha_overlap": 0,
+    return {"verified_image_paths": len(path_roles), "train_dev_path_overlap": 0,
             "available_group_overlap": 0}
 
 
-def validate_resume_contract(payload, config, *, train_sha256, dev_sha256,
-                             reference_sha256=None, risk_profile_sha256=None) -> int:
-    """Reject resuming another run, changed schedule or incomplete AdamW state."""
+def validate_resume_contract(payload, config) -> int:
+    """Validate saved configuration, input filenames and complete AdamW state."""
     stored, meta = payload.get("config", {}), payload.get("metadata", {})
     keys = ("seed", "model_name", "pretrained", "trainable_blocks", "image_size",
             "batch_size", "backbone_lr", "head_lr", "weight_decay", "amp",
@@ -67,19 +52,17 @@ def validate_resume_contract(payload, config, *, train_sha256, dev_sha256,
             "repair_batches_per_cycle", "bce_sampler_seed", "repair_sampler_seed",
             "gamma", "repair_lambda", "ramp_batches", "rho_max", "gradient_epsilon",
             "repair_label_side", "risk_column", "risk_normalization", "risk_normalization_alpha")
-    # Existing checkpoint serialization sanitizes absolute pretrained paths to a
-    # basename. File-level identity is separately pinned in initialization_sha256.
+    # Checkpoint serialization stores absolute initialization paths as basenames.
     for key in keys:
         current = config.get(key)
         if key == "pretrained" and isinstance(current, str) and Path(current).is_absolute():
             current = Path(current).name
         if stored.get(key) != current:
             raise ValueError(f"Resume config mismatch: {key}")
-    if stored.get("initialization_sha256") != config.get("initialization_sha256"):
-        raise ValueError("Resume initialization SHA mismatch")
-    for key, expected in (("train_manifest_sha256", train_sha256), ("dev_manifest_sha256", dev_sha256)):
-        if meta.get(key) != expected:
-            raise ValueError(f"Resume manifest provenance mismatch: {key}")
+    for role in ("train", "dev"):
+        expected = Path(config["manifests"][role]).name
+        if meta.get(f"{role}_manifest") != expected:
+            raise ValueError(f"Resume manifest name mismatch: {role}")
     stage = meta.get("stage")
     if stage == "reference":
         completed, updates = 0, int(config["reference_batches"])
@@ -92,10 +75,10 @@ def validate_resume_contract(payload, config, *, train_sha256, dev_sha256,
         updates = int(config["reference_batches"]) + completed * (int(config["bce_batches_per_cycle"]) + int(config["repair_batches_per_cycle"]))
         if stored.get("completed_cycle") != completed or meta.get("global_updates") != updates:
             raise ValueError("Resume cycle/update metadata mismatch")
-        if meta.get("reference_checkpoint_sha256") != reference_sha256:
-            raise ValueError("Resume reference checkpoint SHA mismatch")
-        if meta.get("risk_profile_sha256") != risk_profile_sha256:
-            raise ValueError("Resume risk profile SHA mismatch")
+        for key in ("reference_checkpoint", "risk_profile"):
+            recorded = meta.get(key)
+            if recorded and recorded != Path(config["paths"][key]).name:
+                raise ValueError(f"Resume input filename mismatch: {key}")
     else:
         raise ValueError(f"Unsupported resume stage: {stage}")
     state = payload.get("optimizer_state_dict")

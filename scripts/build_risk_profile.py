@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Build the fixed domain-label risk profile from a reference checkpoint."""
 
-# SHA256 binds the Train-only profile to its manifest and reference checkpoint;
-# it is training provenance, not dataset construction.
-
 from __future__ import annotations
 
 import argparse
@@ -17,14 +14,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from decd.visual_expert.checkpoint import (  # noqa: E402
-    file_sha256,
     load_yaml_config,
     resolve_project_path,
     restore_detector,
     validate_training_config,
 )
 from decd.visual_expert.data import build_eval_loader, load_manifest  # noqa: E402
-from decd.visual_expert.manifests import content_sha256
 from decd.visual_expert.model import collect_predictions, set_determinism  # noqa: E402
 from decd.visual_expert.risk import (  # noqa: E402
     build_risk_profile,
@@ -85,15 +80,13 @@ def main() -> None:
 
     set_determinism(int(config["seed"]))
     rows = load_manifest(manifest, require_domain=True, role='train')
-    train_content_sha256 = content_sha256(rows)
     detector, _, _, checkpoint_metadata = restore_detector(
         checkpoint,
         device=device,
         restore_optimizer=False,
         expected_config=config,
         require_reference=True,
-        train_manifest_sha256=file_sha256(manifest),
-        train_content_sha256=train_content_sha256,
+        train_manifest=manifest,
     )
     for parameter in detector.parameters():
         parameter.requires_grad = False
@@ -118,12 +111,7 @@ def main() -> None:
         alpha=float(config["risk_normalization_alpha"]),
         provenance={
             "manifest": manifest.name,
-            "manifest_sha256": file_sha256(manifest),
-            "train_content_sha256": train_content_sha256,
             "reference_checkpoint": checkpoint.name,
-            "reference_checkpoint_sha256": checkpoint_metadata[
-                "checkpoint_sha256"
-            ],
         },
     )
     save_risk_profile(output, profile)
