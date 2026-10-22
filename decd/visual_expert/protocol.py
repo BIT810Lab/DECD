@@ -1,5 +1,8 @@
 """Validation helpers for full-data Visual Expert training protocols."""
 
+# SHA256 checks published image integrity and Train/Dev leakage, and binds
+# resume inputs to checkpoints. It is training validation, not construction.
+
 from __future__ import annotations
 
 from collections import Counter

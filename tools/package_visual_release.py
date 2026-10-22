@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Build a fresh code-only distribution from an explicit Visual allowlist."""
+
+# SHA256 verifies the archive and each release member for distribution
+# integrity. It is unrelated to MOSAIC dataset construction.
 from __future__ import annotations
 
 import argparse
@@ -11,7 +14,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = 'decd/visual_expert/RELEASE_FILES.txt'
-ZIP_NAME = 'visual-expert-code-only-RC1.zip'
+ZIP_NAME = 'visual-expert-code-only.zip'
 FORBIDDEN_SUFFIXES = {'.pt', '.pth', '.ckpt', '.safetensors', '.bin', '.csv',
     '.jsonl', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf', '.pkl', '.npz'}
 PRIVATE_PATTERNS = (
@@ -25,7 +28,19 @@ PRIVATE_PATTERNS = (
 
 
 def digest(data):
+    """SHA256 of release bytes for archive/member integrity verification."""
     return hashlib.sha256(data).hexdigest()
+
+
+def visual_readme(text):
+    """Derive archive instructions from the repository's single README."""
+    titles = {'## Installation', '## MOSAIC data', '## Visual Expert', '## Packaging'}
+    sections = [section.strip() for section in re.split(r'(?m)(?=^## )', text)
+                if section.splitlines() and section.splitlines()[0] in titles]
+    found = {section.splitlines()[0] for section in sections}
+    if found != titles:
+        raise ValueError('README is missing a required Visual release section')
+    return '# DECD Visual Expert\n\n' + '\n\n'.join(sections) + '\n'
 
 
 def collect(source):
@@ -39,7 +54,7 @@ def collect(source):
         if (not name or relative.is_absolute() or '..' in relative.parts or '\\' in name
                 or ':' in name or relative.suffix.lower() in FORBIDDEN_SUFFIXES):
             raise ValueError(f'forbidden release member: {name}')
-        if relative.suffix.lower() not in {'.py','.md','.yaml','.txt'} and name not in {'.gitignore','LICENSE','pytest.ini'}:
+        if relative.suffix.lower() not in {'.py','.md','.yaml','.txt'} and name not in {'.gitignore','LICENSE'}:
             raise ValueError(f'non-code/document member in release allowlist: {name}')
         if any(part.lower() in {'outputs','runs','data','datasets','.git','.venv','__pycache__'}
                for part in relative.parts):
@@ -57,6 +72,8 @@ def collect(source):
                 raise ValueError(f'possible private path/credential in {name}; review locally')
         if relative.suffix == '.py':
             compile(data, name, 'exec')
+        if name == 'README.md':
+            data = visual_readme(text).encode('utf-8')
         blobs[name] = data
     return blobs
 

@@ -1,5 +1,8 @@
 """Decision-margin statistics and fixed domain-label risk profiles."""
 
+# SHA256 provenance binds the fixed risk profile to its training manifest and
+# reference checkpoint. It is training validation, not dataset construction.
+
 from __future__ import annotations
 
 from collections import defaultdict

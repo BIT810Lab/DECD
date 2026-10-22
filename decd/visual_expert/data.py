@@ -9,8 +9,7 @@ import torch
 from PIL import Image, ImageOps
 from torch.utils.data import DataLoader, Dataset
 
-from .manifests import (DOMAIN_TO_ID, DOMAIN_ALIASES, PATH_FIELDS, DOMAIN_FIELDS,
-                        canonical_domain, parse_label, read_manifest, assert_role)
+from .manifests import DOMAIN_TO_ID, read_manifest, assert_role
 from .sampler import DomainLabelBalancedBatchSampler
 
 CLIP_MEAN = (0.48145466, 0.45782750, 0.40821073)

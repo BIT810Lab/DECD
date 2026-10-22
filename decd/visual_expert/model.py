@@ -1,5 +1,8 @@
 """OpenCLIP detector construction, trainable parameters, and inference."""
 
+# SHA256 verifies trusted local initialization weights and detects file changes
+# during loading. It is model integrity verification, not dataset construction.
+
 from __future__ import annotations
 
 import math

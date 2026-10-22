@@ -1,8 +1,8 @@
 """Frozen MLLM backbone producing pooled prompt-conditioned hidden states.
 
 The paper uses a completely frozen Qwen2.5-VL-7B-Instruct. ``transformers`` is
-imported lazily so that adapter code, configuration checks, and the CPU test
-suite run without the 7B checkpoint (mirroring the Visual Expert's lazy
+imported lazily so that adapter code and configuration checks run without
+the 7B checkpoint (mirroring the Visual Expert's lazy
 OpenCLIP import). Any object exposing ``feature_dim`` and ``encode(images,
 prompts) -> Tensor[B, K, d]`` can be used as a backbone.
 """

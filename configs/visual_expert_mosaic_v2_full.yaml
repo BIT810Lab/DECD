@@ -1,6 +1,5 @@
 # Full-data MOSAIC v2 Visual Expert experiment.
-# Portable template; run prepare_mosaic_v2_full_split.py to create a private
-# frozen config with manifest/report SHA256 and optional local initialization.
+# Load the published MOSAIC split CSVs directly; no construction step is needed.
 seed: 2026
 model_name: ViT-L-14-quickgelu
 pretrained: openai
@@ -38,8 +37,8 @@ risk_normalization: minmax
 risk_normalization_alpha: 1.0
 
 manifests:
-  train: e2e/manifests/mosaic_v2_frozen/mosaic_train.csv
-  dev: e2e/manifests/mosaic_v2_frozen/mosaic_dev.csv
+  train: data/manifests/mosaic_train.csv
+  dev: data/manifests/mosaic_dev.csv
 
 paths:
   run_dir: outputs/mosaic_v2_full

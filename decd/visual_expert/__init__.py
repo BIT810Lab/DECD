@@ -1,7 +1,7 @@
 """Visual Expert training and evaluation components."""
 
 def __getattr__(name):
-    # Metadata tools do not require importing PyTorch or OpenCLIP.
+    # Keep package metadata importable without loading PyTorch or OpenCLIP.
     if name == 'CLIPBinaryDetector':
         from .model import CLIPBinaryDetector
         return CLIPBinaryDetector

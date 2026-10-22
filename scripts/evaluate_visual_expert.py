@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Evaluate a frozen Visual Expert checkpoint."""
 
+# SHA256 records evaluated manifest/checkpoint integrity for reproducible
+# inference; it is not part of MOSAIC dataset construction.
+
 from __future__ import annotations
 
 import argparse
@@ -85,7 +88,9 @@ def main() -> None:
     manifest = _path(
         args.manifest,
         args.config,
-        config["manifests"]["eval"],
+        # Alternating-training configs only require Train/Dev entries.
+        # An explicit --manifest still takes precedence over this public default.
+        config.get("manifests", {}).get("eval", "data/manifests/mosaic_test.csv"),
     )
     checkpoint = _path(
         args.checkpoint,

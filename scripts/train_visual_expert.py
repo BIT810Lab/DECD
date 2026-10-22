@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Continue B100 reference training with reported real-only risk repair."""
 
+# SHA256 rejects mismatched reference, Train inputs and risk profiles during
+# repair continuation. It is training validation, not dataset construction.
+
 from __future__ import annotations
 
 import argparse

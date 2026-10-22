@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Build the fixed domain-label risk profile from a reference checkpoint."""
 
+# SHA256 binds the Train-only profile to its manifest and reference checkpoint;
+# it is training provenance, not dataset construction.
+
 from __future__ import annotations
 
 import argparse

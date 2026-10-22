@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Train the B100 OpenCLIP reference detector."""
 
+# SHA256 records the reference training inputs for verified repair continuation;
+# it is training provenance, not dataset construction.
+
 from __future__ import annotations
 
 import argparse

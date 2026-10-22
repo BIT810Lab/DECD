@@ -1,5 +1,8 @@
 """Checkpoint save, restore, configuration, and path sanitization."""
 
+# SHA256 binds checkpoint and training-manifest bytes for safe continuation;
+# it is training reproducibility validation, not dataset construction.
+
 from __future__ import annotations
 
 import hashlib

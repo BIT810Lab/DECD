@@ -1,9 +1,9 @@
-"""Small, explicit file-identity protocol shared by training and data tools.
+"""Read published dataset manifests without creating or selecting data splits.
 
-``sha256`` always describes the bytes at ``image_path``. ``original_sha256``
-describes source-file identity. Legacy standardized_sha256 manifests are read
-without confusing their original sha256 with the JPEG bytes actually loaded.
-No function creates a split or silently skips a missing/malformed sample.
+SHA256 verifies loaded image bytes, detects overlap between predefined splits,
+and binds ordered training inputs to checkpoints. It is not MOSAIC construction.
+Optional original/standardized digests are read-only compatibility fields used
+to detect leakage across differently encoded versions of the same image.
 """
 from __future__ import annotations
 
@@ -24,12 +24,11 @@ DOMAIN_ALIASES = {
 PATH_FIELDS = ("image_path", "file_name", "relative_path", "standardized_path",
                "local_path", "path", "filepath", "file_path", "original_image_path")
 DOMAIN_FIELDS = ("domain", "category", "source_domain", "dataset", "source")
-CSV_FIELDS = ("sample_id", "image_path", "domain", "label", "label_name", "sha256",
-              "original_sha256", "group_id", "split", "benchmark_id")
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def file_sha256(path):
+    """Hash file bytes for published-data integrity and training provenance."""
     h = hashlib.sha256()
     with Path(path).open("rb") as f:
         for block in iter(lambda: f.read(1024 * 1024), b""):
@@ -102,10 +101,14 @@ def read_csv(path):
     return fields, rows
 
 
+def canonical_split(value):
+    value = str(value).strip().lower()
+    return {"validation": "dev", "val": "dev", "benchmark_test": "test"}.get(value, value)
+
+
 def assert_role(rows, role):
     for row in rows:
-        split = str(row.get("split", "")).strip().lower()
-        split = {"validation": "dev", "val": "dev", "benchmark_test": "test"}.get(split, split)
+        split = canonical_split(row.get("split", ""))
         if row.get("benchmark_id") and role in ("train", "dev"):
             raise ValueError("Benchmark is test-only: forbidden for training, risk or development")
         if split and split != role:
@@ -157,12 +160,13 @@ def read_manifest(path, *, image_root=None, require_domain=True, path_field=None
         rows.append(dict(row, image_path=p, domain=domain, domain_id=DOMAIN_TO_ID.get(domain, -1),
                          label=label, label_name="Real" if label == 0 else "Fake",
                          sample_id=sid, manifest_index=i, sha256=actual,
-                         original_sha256=original, group_id=str(row.get("group_id", "")).strip()))
+                         original_sha256=original, group_id=str(row.get("group_id", "")).strip(),
+                         split=canonical_split(row.get("split", ""))))
     return rows
 
 
 def content_sha256(rows):
-    # Ordered identity binding, independent of a developer's absolute image_root.
+    """Bind ordered training identities independently of local image paths."""
     data = [[r['sample_id'], r['domain'], r['label'], r['sha256'],
              r['original_sha256'], r.get('group_id', '')] for r in rows]
     return hashlib.sha256(json.dumps(data, separators=(",", ":")).encode()).hexdigest()
@@ -177,42 +181,3 @@ def assert_disjoint(left, right):
     groups_r = {r['group_id'] for r in right if r.get('group_id')}
     if identities(left) & identities(right) or groups_l & groups_r:
         raise ValueError("Train/Dev or exclusion identity/group overlap")
-
-
-def exclusion_identities(paths):
-    hashes, groups, provenance = set(), set(), []
-    for value in paths:
-        p = Path(value).expanduser().resolve()
-        fields, rows = read_csv(p)
-        pf = next((k for k in PATH_FIELDS if k in fields), "")
-        for i, row in enumerate(rows):
-            hs = {sha_text(row.get(k)) for k in
-                  ("sha256", "original_sha256", "standardized_sha256", "image_sha256", "file_sha256")}
-            hs.discard("")
-            if not hs:
-                if not pf:
-                    raise ValueError(f"exclusion row {i}: no comparable identity or image path")
-                image = resolve_image(row[pf], p.parent)
-                if not image.is_file():
-                    raise FileNotFoundError(f"exclusion row {i}: cannot establish identity")
-                hs.add(file_sha256(image))
-            hashes.update(hs)
-            if row.get("group_id", "").strip(): groups.add(row['group_id'].strip())
-        provenance.append({"manifest": p.name, "sha256": file_sha256(p), "rows": len(rows)})
-    return hashes, groups, provenance
-
-
-def public_rows(rows, output, *, split, benchmark_id=""):
-    parent = Path(output).resolve().parent
-    return [dict(sample_id=r['sample_id'], image_path=Path(os.path.relpath(r['image_path'], parent)).as_posix(),
-                 domain=r['domain'], label=r['label'], label_name=r['label_name'],
-                 sha256=r['sha256'], original_sha256=r['original_sha256'],
-                 group_id=r.get('group_id', ''), split=split, benchmark_id=benchmark_id) for r in rows]
-
-
-def write_csv_exclusive(path, rows, fields=CSV_FIELDS):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('x', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=fields, lineterminator='\n')
-        writer.writeheader(); writer.writerows(rows)

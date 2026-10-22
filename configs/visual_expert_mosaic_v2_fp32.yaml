@@ -1,6 +1,6 @@
 seed: 2026
 model_name: ViT-L-14-quickgelu
-# Portable FP32 template; private frozen inputs are generated on the user's host.
+# FP32 training with published MOSAIC split CSVs.
 pretrained: openai
 trainable_blocks: 2
 image_size: 224
@@ -30,8 +30,8 @@ risk_column: risk_mean_m0p5
 risk_normalization: minmax
 risk_normalization_alpha: 1.0
 manifests:
-  train: e2e/manifests/mosaic_v2_frozen/mosaic_train.csv
-  dev: e2e/manifests/mosaic_v2_frozen/mosaic_dev.csv
+  train: data/manifests/mosaic_train.csv
+  dev: data/manifests/mosaic_dev.csv
 paths:
   run_dir: outputs/mosaic_v2_fp32_seed2026
   reference_checkpoint: outputs/mosaic_v2_fp32_seed2026/reference/reference.pth

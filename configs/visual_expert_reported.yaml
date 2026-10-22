@@ -35,7 +35,7 @@ risk_normalization_alpha: 1.0
 manifests:
   train: data/manifests/mosaic_train.csv
   dev: data/manifests/mosaic_dev.csv
-  eval: data/manifests/eval.csv
+  eval: data/manifests/mosaic_test.csv
 
 paths:
   reference_checkpoint: outputs/reference/reference.pth

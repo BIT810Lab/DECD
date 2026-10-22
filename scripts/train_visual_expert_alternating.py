@@ -11,6 +11,9 @@ The BCE and repair DataLoader iterators are each created once and consumed
 across cycles. Their sampler queues therefore advance continuously.
 """
 
+# SHA256 validates published split bytes, initialization and checkpoint/profile
+# provenance for training and resume. It is not dataset construction.
+
 from __future__ import annotations
 
 import argparse
@@ -334,14 +337,12 @@ def main() -> None:
 
     if not args.dry_run:
         set_determinism(int(config["seed"]))
-    freeze = config.get("data_freeze")
-    if freeze:
-        report_path = _path(args.config, freeze["report"])
-        if file_sha256(report_path) != freeze["report_sha256"]:
-            raise ValueError("Data freeze report SHA mismatch")
-        for role, manifest in (("train", train_manifest), ("dev", dev_manifest)):
-            if file_sha256(manifest) != freeze["manifest_sha256"][role]:
-                raise ValueError(f"Frozen {role} manifest SHA mismatch")
+    # Optional SHA256 pins verify published split CSVs for this training run.
+    # No construction report or private candidate-pool index is required.
+    manifest_pins = config.get("manifest_sha256", {})
+    for role, manifest in (("train", train_manifest), ("dev", dev_manifest)):
+        if role in manifest_pins and file_sha256(manifest) != manifest_pins[role]:
+            raise ValueError(f"Published {role} manifest SHA256 mismatch")
     # Check manifest cardinalities before checking every image path, so an old
     # or partial manifest fails with a useful split-size error first.
     train_rows_manifest = load_manifest(

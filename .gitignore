@@ -54,10 +54,26 @@ id_rsa*
 id_ed25519*
 credentials*.json
 secrets*.json
-!tests/**/placeholder
 .DS_Store
 
-# Private generated MOSAIC split records and machine-specific frozen configs.
-e2e/manifests/
-e2e/preflight_mosaic_v2_*/
+# Local artifacts and independent code distributions.
+*.log
+*.tmp
+*.zip
+*.zip.sha256
+*.tar
+*.tar.gz
+distribution/
+release/
+releases/
+logs/
+metadata.csv
+mosaic_*.csv
+*_freeze.json
+freeze.sha256
+benchmark_freeze.sha256
+package_manifest.json
+configs/*_local.yaml
 configs/visual_expert_mosaic_v2_frozen*.yaml
+e2e/
+.ipynb_checkpoints/

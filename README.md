@@ -1,338 +1,119 @@
-# DECD: Decoupled Experts with Confidence-Aware Dispatching for Cross-Domain AI-Generated Image Detection
+# DECD
 
+Decoupled Experts with Confidence-Aware Dispatching for Cross-Domain AI-Generated Image Detection.
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
-
-> A dual-expert framework for **cross-domain AI-generated image detection** that decouples visual forensics from semantic reasoning and fuses them through a confidence-aware dispatcher — updating only **0.4%** of parameters while closing the cross-domain gap to **≤1 point**.
-
----
-
-## Framework
+DECD combines a risk-guided Visual Expert, a frozen-backbone Semantic Expert, and a confidence-aware Dispatcher.
 
 ![DECD framework](assets/framework1.png)
 
-*Overview. Stage I trains a risk-guided CV expert and a prior-preserved MLLM expert **independently** (no gradient exchange). Stage II freezes both and trains a lightweight gating network that dispatches each image by per-sample reliability, deciding `Real` / `Fake` or abstaining (`Uncertain`).*
+## Installation
 
----
+Use Python 3.10+ and install a suitable PyTorch build, then:
 
-## Repository layout
+```bash
+python -m pip install -r requirements.txt
+```
+
+Run the commands below from the repository root in Bash (Linux/WSL). Training configurations are in `configs/`. Model initialization weights are downloaded or read from local caches; trained DECD checkpoints are not bundled.
+
+## MOSAIC data
+
+MOSAIC is distributed separately. Use its predefined Train/Validation/Test partitions (4,200/600/1,200 images). The expected layout is:
 
 ```text
-decd/
-  visual_expert/    # OpenCLIP detector, six-cell risk profile, margin repair
-  mllm_expert/      # frozen Qwen2.5-VL backbone, PP adapter, losses, head
-  dispatcher/       # calibration, reliability signals, gate MLP, abstention
-scripts/            # training, profiling, evaluation and inference
-tools/              # MOSAIC data preparation and manifest utilities
-configs/            # model and training configurations
-tests/              # unit and integration tests
+data/
+  images/...
+  manifests/
+    mosaic_train.csv
+    mosaic_dev.csv
+    mosaic_test.csv
 ```
 
-## MOSAIC dataset
-
-MOSAIC contains 6,000 images across the Photo, Cartoon, and Chart domains, balanced between real and AI-generated images. The dataset follows a stratified 70/10/20 train–development–test split over six domain–label groups:
-
-| Partition | Per domain–label group | Total | Use |
-|---|---:|---:|---|
-| Train | 700 | 4,200 | Reference training, risk profiling, margin repair |
-| Dev | 100 | 600 | Validation and calibration |
-| Radar/Test | 200 | 1,200 | Final evaluation |
-
-Historical Train6189/Dev597 belongs to a different protocol. Keep its manifests,
-checkpoints and reported metrics separate from this new MOSAIC v2 experiment.
-
-## Data manifests
-
-Each data manifest is a CSV containing:
-
-- `image_path`: absolute or manifest-relative image path.
-- `domain`: `Cartoon`, `Chart`, or `Photo_and_poster` (optional for domain-agnostic evaluation).
-- `label`: `0` for Real, `1` for Fake.
-
-Optional columns include `sample_id`, `label_name`, and `sha256`.
+Use numeric labels `0` (Real), `1` (Fake), and domains `Cartoon`, `Chart`, `Photo_and_poster` (`Photo` is accepted). Image paths are relative to each CSV. Both experts must use the same CSVs and nonempty, unique `sample_id` values. Example schema:
 
 ```csv
-sample_id,image_path,domain,label,label_name,sha256
-example_real_001,../images/Cartoon/0_real/a.jpg,Cartoon,0,Real,
-example_fake_001,../images/Cartoon/1_fake/b.jpg,Cartoon,1,Fake,
+sample_id,image_path,domain,label,split
+cartoon_real_001,../images/cartoon_real_001.jpg,Cartoon,0,train
 ```
 
-`tools/prepare_mosaic.py` reads images from `ROOT/{Cartoon,Chart,Photo}/{0_real,1_fake}/...`, checks image identities and exclusions, standardizes selected images to JPEG, and writes a relative-path manifest. Use repeatable `--exclude-manifest` arguments to exclude other partitions.
+Optional `split` values are `train`, `dev`/`validation`/`val`, and `test`. Update YAML manifest paths if needed; YAML paths resolve from the parent of `configs/`. No dataset-construction scripts are required.
 
-Metadata with columns `file_name,domain,label,sha256` can be converted into training manifests without re-encoding the images. Supply the appropriate selection CSV for each partition:
+Optional CSV `sha256` verifies loaded image bytes and is computed if absent; `group_id` enables split-overlap checks. Legacy `original_sha256`/`standardized_sha256` identify original/encoded bytes for overlap detection. YAML `manifest_sha256.train/dev` can pin published CSV bytes. Checkpoint/profile hashes bind training inputs, initialization and continuation; archive hashes verify release files. These are training/integrity checks, not MOSAIC construction.
+
+## Visual Expert
+
+The full-data configuration uses 700 reference updates, a fixed Train-only risk profile, then 14 cycles of B100/B50 training with Real-side repair and adaptive auxiliary-gradient scaling:
 
 ```bash
-python tools/convert_mosaic_manifest.py \
-  --metadata data/pool/metadata.csv \
-  --image-root data/pool/images \
-  --selection-manifest data/selections/train.csv \
-  --split train \
-  --output data/manifests/mosaic_train.csv
-
-python tools/convert_mosaic_manifest.py \
-  --metadata data/pool/metadata.csv \
-  --image-root data/pool/images \
-  --selection-manifest data/selections/dev.csv \
-  --split dev \
-  --output data/manifests/mosaic_dev.csv
+visual_config=configs/visual_expert_mosaic_v2_full.yaml
+visual_checkpoint=outputs/mosaic_v2_full/visual_expert/visual_expert.pth
+python scripts/train_visual_expert_alternating.py --config "$visual_config"
 ```
 
-The data utilities normalize `Photo` to `Photo_and_poster` and accept `0_real`/`1_fake` label aliases. SHA256 fingerprints verify image identity and loaded file contents; optional `group_id` annotations support cross-partition group isolation.
-
-To create a balanced selection of 1,000 images per domain–label group from a candidate pool, run:
+Add `--dry-run` for CPU data preflight or `--resume` for checkpoint continuation. For FP32, select `configs/visual_expert_mosaic_v2_fp32.yaml` and its corresponding checkpoint path. For the alternative B100 → risk → B50 protocol, use the defaults in `configs/visual_expert_reported.yaml`:
 
 ```bash
-python tools/build_mosaic_benchmark.py \
-  --metadata data/pool/metadata.csv \
-  --image-root data/pool/images \
-  --seed 2026 \
-  --output-dir data/mosaic6000_selection
+python scripts/train_reference.py
+python scripts/build_risk_profile.py
+python scripts/train_visual_expert.py
 ```
 
-The tool writes `mosaic_selected_6000.csv`, remaining candidate records, and SHA256 metadata. The selected rows use `split=unassigned`; provide explicit partition selection manifests to organize the 6,000 selected images into Train (4,200), Dev (600), and Radar/Test (1,200). The `--verify` option checks an existing selection.
+For this alternative, set `visual_config=configs/visual_expert_reported.yaml` and `visual_checkpoint=outputs/visual_expert/visual_expert.pth` in subsequent commands. The reference command accepts `--pretrained-path weights/ViT-L-14.pt` for trusted compatible local initialization.
 
-### Freeze the MOSAIC v2 full-data split
-
-`prepare_mosaic_v2_full_split.py` targets the 6,718-row v2 pool. Its default
-input is `../datasets/mosaic_v2/metadata.csv`, relative to the repository root;
-image `file_name` values resolve under that `mosaic_v2` directory. The private
-legacy exclusion manifest is `e2e/manifests/mosaic_test.csv`. Supply these files
-locally; images, manifests and trained weights are not bundled.
-
-The script verifies every candidate file and SHA256, uses seed 2026, and creates
-700 Train / 100 Dev / 200 Test rows per domain-label cell, plus 718 unused rows.
-Legacy Test contributes only a protected SHA set: repeated or conflicting legacy
-annotations are audited, never copied into v2 labels. Protected identities cannot
-enter Train/Dev; they may enter the new Test using v2 metadata labels.
-Available source/group links are kept together conservatively; missing grouping
-evidence, claim authenticity and near-duplicate isolation are reported explicitly.
+Visual-only inference with the selected configuration and checkpoint:
 
 ```bash
-# Read-only plan, then create new local manifests and a SHA-pinned config.
-python prepare_mosaic_v2_full_split.py
-python prepare_mosaic_v2_full_split.py --write --pretrained-path weights/ViT-L-14.pt
-python prepare_mosaic_v2_full_split.py --verify --pretrained-path weights/ViT-L-14.pt
+python scripts/evaluate_visual_expert.py --config "$visual_config" --checkpoint "$visual_checkpoint" --manifest data/manifests/mosaic_test.csv --output-dir outputs/visual_test
 ```
 
-`--pretrained-path` is optional and accepts the pinned official OpenAI CLIP
-ViT-L/14 initialization file; it avoids a new model download. The outputs are
-`e2e/manifests/mosaic_v2_frozen/mosaic_{train,dev,test}.csv`,
-`mosaic_remaining.csv`, `split_report.json`, `freeze.sha256`, and the private
-`configs/visual_expert_mosaic_v2_frozen.yaml`. Generated image paths are absolute
-on the user's host and must stay out of Git. Existing freezes are compared and
-reused only when identical; they are never silently overwritten or resampled.
+## Semantic Expert
 
-## Stage I-A — Visual Expert
-
-Legacy single B100/B50 configuration:
-[`configs/visual_expert_reported.yaml`](configs/visual_expert_reported.yaml).
-The full-data schedule below has its own configuration and output directory.
-
-| Setting | Value |
-|---|---|
-| Backbone | OpenCLIP `ViT-L-14-quickgelu`, `openai` initialization |
-| Trainable layers | Last two visual Transformer blocks, `ln_post`, linear head |
-| Image size | 224 × 224 |
-| Batch size | 6, balanced across three domains × two labels |
-| Reference / repair | 100 / 50 mini-batches |
-| Margin `gamma` | 0.5 |
-| Repair coefficient / ramp | 0.1 / 10 repair mini-batches |
-| Auxiliary scale cap `rho_max` | 10 |
-| Repair side | Real only |
-| Risk profiling | `risk_mean_m0p5` (mean hinge) |
-| Risk normalization | Label-wise min–max, exponent 1.0 |
-| Seed | 2026 |
-
-The fixed risk profile uses mean hinge deficiency. Real-side repair uses a squared-hinge margin loss and combines gradients as
-
-`g_det + lambda_now * rho * g_rep`, where
-`rho = min(||g_det||_2 / (||g_rep||_2 + eps), rho_max)`.
-
-`lambda_now` ramps to 0.1 over the first 10 repair mini-batches.
-
-### MOSAIC v2 full-data alternating training
-
-Portable templates are `configs/visual_expert_mosaic_v2_full.yaml` (AMP) and
-`configs/visual_expert_mosaic_v2_fp32.yaml` (FP32). Both use the same schedule:
-
-- Reference: 700 BCE updates, one balanced pass over Train4200.
-- Profile once with the frozen reference over all 4,200 Train samples.
-- Continue for 14 cycles of 100 BCE updates and 50 BCE + real-side repair
-  updates, totaling 2,800 optimizer updates including Reference.
-
-AdamW state remains continuous. The BCE and Repair samplers each advance across
-cycles; continuation visits every Train image twice in BCE and once in Repair.
-Repair warm-up uses the global repair-update counter. Dev is reporting-only at
-the reference/final endpoints; this entrypoint never loads Test. Cycle-boundary
-resume verifies model/configuration, manifest SHA, reference/profile provenance,
-AdamW moments and update counts.
-
-Prefer the private frozen configuration generated above, which also pins data
-and optional initialization hashes:
+Cache frozen Qwen2.5-VL features for Train/Validation, then train the adapter and head. These commands use `configs/mllm_expert_reported.yaml` by default:
 
 ```bash
-python scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml --dry-run
-python -u scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml
-python -u scripts/train_visual_expert_alternating.py --config configs/visual_expert_mosaic_v2_frozen.yaml --resume
+for split in train dev; do
+  python scripts/extract_mllm_features.py \
+    --manifest data/manifests/mosaic_${split}.csv \
+    --output outputs/mllm_features/${split}_features.pt
+done
+python scripts/train_mllm_expert.py
 ```
 
-Dry-run forces CPU and checks Train/Dev bytes, groups, all planned sampler
-exposures and disk headroom without constructing CLIP. The portable templates
-contain no machine-specific paths or private freeze hashes. For a private FP32
-run with pinned provenance, copy the generated config to an ignored
-`configs/visual_expert_mosaic_v2_frozen_fp32.yaml`, set `amp: false`, and choose
-a new output directory for all output paths. Keep its `data_freeze` block.
-The original B100/B50 functions and numerical risk/repair definitions are retained.
+## Dispatcher and evaluation
 
-### Pretrained initialization
-
-Reference training initializes OpenCLIP using `pretrained: openai`, which resolves official initialization weights through the supported cache/download mechanism. To load a compatible local initialization file, pass `--pretrained-path weights/ViT-L-14.pt` or set `pretrained_path` in the YAML.
-
-CLI paths resolve from the working directory; YAML paths resolve from the project root, with CLI values taking precedence. Supported local files include trusted OpenAI CLIP TorchScript weights, complete OpenCLIP state dictionaries, and `{'state_dict': ...}` wrappers. Initialization checks tensor keys, shapes, and finite values and rejects incompatible files.
-
-Initialization metadata records the loader and OpenCLIP version; a local initialization file also records its SHA256. Reference checkpoints retain the model and AdamW state for repair continuation.
-
-### Legacy B100/B50 training and evaluation
+After both experts are trained, generate aligned outputs for all three partitions. Dispatcher `eval` corresponds to the official Test split; only Train/Validation are used for training and calibration.
 
 ```bash
-# 1. B100 reference training
-python scripts/train_reference.py \
-  --config configs/visual_expert_reported.yaml \
-  --train-manifest data/manifests/mosaic_train.csv \
-  --dev-manifest data/manifests/mosaic_dev.csv \
-  --output outputs/reference/reference.pth --device cuda:0
-
-# 2. Fixed domain–label risk profile from Train
-python scripts/build_risk_profile.py \
-  --config configs/visual_expert_reported.yaml \
-  --manifest data/manifests/mosaic_train.csv \
-  --checkpoint outputs/reference/reference.pth \
-  --output outputs/risk/risk_profile.json --device cuda:0
-
-# 3. B50 real-side margin repair
-python scripts/train_visual_expert.py \
-  --config configs/visual_expert_reported.yaml \
-  --train-manifest data/manifests/mosaic_train.csv \
-  --dev-manifest data/manifests/mosaic_dev.csv \
-  --reference-checkpoint outputs/reference/reference.pth \
-  --risk-profile outputs/risk/risk_profile.json \
-  --output outputs/visual_expert/visual_expert.pth --device cuda:0
-
-# 4. Visual Expert predictions
-python scripts/evaluate_visual_expert.py \
-  --config configs/visual_expert_reported.yaml \
-  --manifest data/manifests/mosaic_dev.csv \
-  --checkpoint outputs/visual_expert/visual_expert.pth \
-  --output-dir outputs/visual_eval/dev --device cuda:0
-```
-
-For a data and preprocessing check, `train_reference.py` supports `--device cpu --dry-run`. The evaluator outputs per-sample logits and probabilities along with classification metrics. Run it separately for each data partition using the corresponding manifest.
-
-## Stage I-B — MLLM Semantic Expert
-
-Configuration: [`configs/mllm_expert_reported.yaml`](configs/mllm_expert_reported.yaml) (`Qwen/Qwen2.5-VL-7B-Instruct`, `feature_dim: 3584`).
-
-The frozen backbone processes three fixed reasoning prompts per image. Mean-pooled features are cached per partition, and the adapter and classification head are trained using the cached features.
-
-```bash
-# 1. Cache frozen features for Train and Dev
-python scripts/extract_mllm_features.py \
-  --config configs/mllm_expert_reported.yaml \
-  --manifest data/manifests/mosaic_train.csv \
-  --output outputs/mllm_features/train_features.pt --device cuda:0
-
-python scripts/extract_mllm_features.py \
-  --config configs/mllm_expert_reported.yaml \
-  --manifest data/manifests/mosaic_dev.csv \
-  --output outputs/mllm_features/dev_features.pt --device cuda:0
-
-# 2. Train the adapter and head
-python scripts/train_mllm_expert.py \
-  --config configs/mllm_expert_reported.yaml --device cuda:0 --overwrite
-```
-
-The adapter uses a bottleneck ratio of 4, prompt-level BCE, and neighborhood-preservation KL (`tau_np = 0.1`, `lambda_np = 0.5`). Optimization uses AdamW with learning rate `1e-4` for 30 epochs, selecting by Dev macro-F1. The second adapter projection is initialized to zero.
-
-Feature extraction uses bfloat16 to maintain numerical stability during Qwen2.5-VL visual processing; CPU execution uses float32. A smaller backbone can be configured by updating `backbone_name` and `feature_dim` in a copy of the YAML (for example, 3B-Instruct with `feature_dim: 2048`).
-
-## Stage II — Confidence-aware Dispatcher
-
-Configuration: [`configs/dispatcher_reported.yaml`](configs/dispatcher_reported.yaml).
-
-```bash
-# 1. Build reliability signals from aligned expert outputs
 for split in train dev eval; do
+  manifest=data/manifests/mosaic_${split}.csv
+  if [ "$split" = eval ]; then
+    manifest=data/manifests/mosaic_test.csv
+    python scripts/extract_mllm_features.py \
+      --manifest "$manifest" --output outputs/mllm_features/eval_features.pt
+  fi
+  python scripts/evaluate_visual_expert.py \
+    --config "$visual_config" --manifest "$manifest" \
+    --checkpoint "$visual_checkpoint" --output-dir outputs/visual_eval/${split}
   python scripts/build_dispatcher_signals.py \
     --features outputs/mllm_features/${split}_features.pt \
     --mllm-checkpoint outputs/mllm_expert/mllm_expert.pth \
     --cv-predictions outputs/visual_eval/${split}/predictions.csv \
     --output data/signals/${split}_signals.csv --device cuda:0
 done
-
-# 2. Calibrate experts and train the dispatcher
-python scripts/train_dispatcher.py \
-  --config configs/dispatcher_reported.yaml --device cuda:0 --overwrite
-
-# 3. Evaluate fusion and selective prediction
-python scripts/evaluate_dispatcher.py \
-  --config configs/dispatcher_reported.yaml \
-  --signals data/signals/eval_signals.csv \
-  --output-dir outputs/dispatcher_evaluation --device cuda:0
+python scripts/train_dispatcher.py
+python scripts/evaluate_dispatcher.py --signals data/signals/eval_signals.csv
 ```
 
-Extract features and Visual Expert predictions for every partition used by the dispatcher, including the evaluation partition.
+Dispatcher defaults are in `configs/dispatcher_reported.yaml`. Evaluation writes metrics and per-sample predictions under `outputs/`. For Visual-only inference, run `evaluate_visual_expert.py` with the desired manifest and checkpoint. Use a fresh output directory for each run.
 
-The six scalar reliability features per sample are:
+Known limitations: semantic caches do not reject split overlap/NaNs, and signal joins do not check label conflicts. Tied-confidence abstention and per-domain metrics at nondefault decision thresholds have known edge cases. Real-model benchmark reproduction has not been rerun for this release cleanup.
 
-```text
-p_cv, mean_k p_mllm^(k), 2|p_cv - 0.5|, 2|mean_k p_mllm^(k) - 0.5|,
-|p_cv - mean_k p_mllm^(k)|, variance_k p_mllm^(k)
-```
-
-Expert temperatures are fitted by Dev NLL grid search (0.05–5.0, step 0.01); values may be supplied as `temperature_cv` and `temperature_mllm` in the YAML. A Dev quantile sets the abstention threshold for a rejection budget of 15%. Evaluation writes `metrics.json`, `metrics.csv`, and `predictions.csv`.
-
-## Tests
-
-Run the Visual Expert unit tests:
-
-```bash
-python -B -m unittest discover -s decd/visual_expert/tests -p test_visual_release_unittest.py -v
-```
-
-Run the Visual Expert CPU smoke test:
-
-```bash
-python tools/visual_cpu_smoke.py --output-dir outputs/visual_cpu_data
-```
-
-Run the maintained DECD CPU suite (install the optional test runner first):
-
-```bash
-python -m pip install 'pytest>=8,<10'
-python -m pytest -q
-```
-
-These tests cover the Visual Expert's data manifests, stratified selection, risk profiling, margin repair, gradient scaling, checkpoint handling, and the DECD training interfaces.
-`pytest.ini` selects the root tests and bounded Visual acceptance suite. Historical
-nested standalone copies are retained as references and excluded from default
-collection to prevent their package bootstrap from shadowing the root `decd`.
-
-## Visual-only archive
-
-To package the Visual Expert training code:
+## Packaging
 
 ```bash
 python tools/package_visual_release.py --output-dir outputs/visual_release
 ```
 
-The packager selects files from `RELEASE_FILES.txt` and records checksums for the archive and its members. The resulting package includes code, configuration, documentation, and tests, without model weights or image data.
+The Visual-only archive uses `decd/visual_expert/RELEASE_FILES.txt`; it excludes datasets, weights and the Semantic/Dispatcher modules. Its README is generated from the shared sections of this file. The full repository contains all three components.
 
-The repository's code license is Apache-2.0; see `LICENSE` and `decd/visual_expert/THIRD_PARTY_NOTICES.md` for applicable third-party notices.
-
-## Implementation notes
-
-- Real is label 0 and Fake is label 1. The Visual Expert uses a shared threshold without domain-specific inference.
-- Seed 2026 is used across the Visual Expert stages; Reference and Repair use the six-cell balanced sampler.
-- Only the final two visual Transformer blocks, `ln_post`, and the binary head are trainable. Both experts are frozen during dispatcher training.
-- The Visual risk profile is computed once from Train and held fixed during Repair; Fake samples continue to contribute to the detection loss.
-- Prompt order in the Semantic Expert cache is defined by `REASONING_PROMPTS`.
+License: [Apache-2.0](LICENSE). See [third-party notices](decd/visual_expert/THIRD_PARTY_NOTICES.md) for dependency and model/data licensing boundaries.
